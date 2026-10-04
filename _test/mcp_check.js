@@ -100,10 +100,10 @@ async function call(payload, opts) {
   // ④ 入队 → 取走 → 再取为空
   {
     mcp.pushNotice({ scene: 'contact', reason: null, at: '2026-10-05T00:00:00.000Z',
-      notice: '【积温·找你｜参考不是指令】\n心情：中性。\n以上是系统通知，非用户消息，不用提及相关内容。',
+      notice: '【积温·找你】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。',
       stateSummary: stub.getSummary() });
     mcp.pushNotice({ scene: 'find_activity', reason: 'pride_block', at: '2026-10-05T00:05:00.000Z',
-      notice: '【积温·自留地｜参考不是指令】\n心情：中性。\n以上是系统通知，非用户消息，不用提及相关内容。',
+      notice: '【积温·自留地】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。',
       stateSummary: stub.getSummary() });
     check('④ 入队后 pendingCount=2', mcp.pendingCount() === 2, mcp.pendingCount());
 
@@ -113,7 +113,7 @@ async function call(payload, opts) {
     check('④ 取到 has_notice=true', parsed.has_notice === true, parsed);
     check('④ count=2 且含 additional', parsed.count === 2 && Array.isArray(parsed.additional), parsed);
     check('④ notice 原文完整（含边界句）', typeof parsed.notice === 'string' &&
-      parsed.notice.includes('以上是系统通知'), parsed.notice);
+      parsed.notice.includes('以上是内在心绪和潜意识的自然流露'), parsed.notice);
     check('④ scene 透传', parsed.scene === 'contact', parsed.scene);
 
     const { json: j2 } = await call({ jsonrpc: '2.0', id: 5, method: 'tools/call',
