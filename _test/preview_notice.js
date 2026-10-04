@@ -21,12 +21,12 @@ const CASES = [
     st: { connection: 0.42, pride: 0.4, valence: 0.1, arousal: -0.2, immersion: 0.1 },
   },
   {
-    name: '② 找你（contact）· 过了考虑线',
+    name: '② 找她（contact）· 过了考虑线',
     fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride),
     st: { connection: 0.42, pride: 0.4, valence: 0.1, arousal: -0.2, immersion: 0.1 },
   },
   {
-    name: '③ 找你（contact）· 过了强制线',
+    name: '③ 找她（contact）· 过了强制线',
     fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride),
     st: { connection: 0.62, pride: 0.2, valence: 0.3, arousal: 0.4, immersion: 0.1 },
   },
@@ -41,8 +41,8 @@ const CASES = [
     st: { connection: 0.10, pride: 0.2, valence: -0.8, arousal: -0.3, immersion: 0.1 },
   },
   {
-    name: '⑥ 过载（high_arousal）',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'high_arousal', reason: 'high_arousal' }, cfg.sceneOverride),
+    name: '⑥ 自留地（find_activity / high_arousal）',
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride),
     st: { connection: 0.10, pride: 0.4, valence: -0.2, arousal: 0.8, immersion: 0.1 },
   },
 ];

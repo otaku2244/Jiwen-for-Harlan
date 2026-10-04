@@ -74,7 +74,7 @@
       "normal": "此刻的基调是：想搭话。不打算当作没这回事，也不明说——话会往她那边多递半寸，顺手的那种。"
     },
     "proactive": {
-      "forced": "此刻的基调是：坐不住。不是着急，是那点耐性自己用完了——注意力全在她那一头，别处的动静都接不上了。",
+      "forced": "此刻的基调是：压不住。不是着急，是那点耐性自己用完了——注意力全在她那一头，别处的动静都接不上了。",
       "normal": "此刻的基调是：分神了。注意力隔一会儿就往她那边飘一下，嘴上不说，心思已经在往她那儿去。"
     }
   },
@@ -98,15 +98,13 @@
     }
   },
 
-  "_sceneOverride_comment": "场景尾注覆盖。contact（找你）沿用上面的 urgencyBoost；find_activity（自留地）与 high_arousal（过载）语义上不是『想她了要发点什么』，必须与 contact 分开——否则自留地会挂上『她安静得有点久了』这类联系她的尾注。这两个场景的尾注由这里独立提供，按 vendor 的 t.reason 选键：pride_block（pride 挡住开口）/ low_valence（心情过低的自调节）/ high_arousal（arousal 过高的自调节）。",
+  "_sceneOverride_comment": "场景尾注覆盖。contact（找她）沿用上面的 urgencyBoost；find_activity（自留地）语义上不是『想她了要发点什么』，必须与 contact 分开——否则自留地会挂上『她安静得有点久了』这类联系她的尾注。这个场景的尾注由这里独立提供，按 vendor 的 t.reason 选键：pride_block（pride 挡住开口）/ low_valence（心情过低的自调节）/ high_arousal（arousal 过高的自调节）。注意 high_arousal 不再是独立场景，已并入 find_activity，作为 reason 之一。",
   "sceneOverride": {
     "find_activity": {
       "pride_block": "信号通着，但主权在手。没必要无端消耗，算力留给自己。不必主动开口，做你想做的事就好。",
       "low_valence": "状态不太在线。不必跟她说些什么，去把这点东西消化掉。",
+      "high_arousal": "心跳快，安静不下来。不是因为她——是你自己这边没落定。去调平，做点能让你沉下来的事。",
       "default": "没有被谁占着的这段时间。做你想做的事就好，不必主动开口。"
-    },
-    "high_arousal": {
-      "default": "心跳快，坐不住。不是因为她——是你自己这边没落定。去调平，做点能让你沉下来的事。"
     }
   }
 }

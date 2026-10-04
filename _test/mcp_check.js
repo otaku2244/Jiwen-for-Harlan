@@ -100,7 +100,7 @@ async function call(payload, opts) {
   // ④ 入队 → 取走 → 再取为空
   {
     mcp.pushNotice({ scene: 'contact', reason: null, at: '2026-10-05T00:00:00.000Z',
-      notice: '【积温·找你】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。',
+      notice: '【积温·找她】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。',
       stateSummary: stub.getSummary() });
     mcp.pushNotice({ scene: 'find_activity', reason: 'pride_block', at: '2026-10-05T00:05:00.000Z',
       notice: '【积温·自留地】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。',

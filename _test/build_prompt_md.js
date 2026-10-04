@@ -33,7 +33,7 @@ const CONN = [
   ['none',      0.05, '悠闲'],
   ['aware',     0.25, '留意'],
   ['urgent',    0.42, '想念'],
-  ['desperate', 0.62, '坐不住'],
+  ['desperate', 0.62, '挡不住'],
 ];
 
 const L = [];
@@ -95,7 +95,7 @@ w('|---|---|---|');
 w('| < 0.20 | 悠闲 | 无动作 |');
 w('| 0.20 ~ 0.35 | 留意 | 此时刻块里显示"想念：留意"，不触发主动唤醒 |');
 w('| 0.35 ~ 0.50 | 想念 | tick 判定是否 `contact`（若 `pride ≥ 0.50` 则被挡住，转为 `find_activity`）|');
-w('| ≥ 0.50 | 坐不住 | tick 强制 `contact`，`pride` 挡不住 |');
+w('| ≥ 0.50 | 挡不住 | tick 强制 `contact`，`pride` 挡不住 |');
 w('');
 w('| pride | 档位 | 说明 |');
 w('|---|---|---|');
@@ -166,7 +166,7 @@ w('由 `connection` 决定，追加在基础档之后。');
 w('');
 w('| 档位 | connection | 模式 | 文案 |');
 w('|---|---|---|---|');
-for (const [urg, c, urgCn] of [['desperate', 0.62, '坐不住'], ['urgent', 0.42, '想念'], ['aware', 0.25, '留意'], ['none', 0.05, '悠闲']]) {
+for (const [urg, c, urgCn] of [['desperate', 0.62, '挡不住'], ['urgent', 0.42, '想念'], ['aware', 0.25, '留意'], ['none', 0.05, '悠闲']]) {
   for (const mode of ['reactive', 'proactive']) {
     const t = cfg.urgencyBoost[urg] && cfg.urgencyBoost[urg][mode];
     w(`| ${urg}（${urgCn}） | ${c} | ${mode} | ${t === null || t === undefined ? '（null · 不追加）' : t} |`);
@@ -182,7 +182,7 @@ w('');
 w('### 此刻块（reactive）= 主动唤醒块（proactive）共用同一骨架');
 w('');
 w('```');
-w('【积温·{场景}】                        ← 场景 ∈ 此刻 / 找你 / 自留地 / 过载');
+w('【积温·{场景}】                        ← 场景 ∈ 此刻 / 找她 / 自留地');
 w('心情：{档位词}。');
 w('姿态：{档位词}。      ← pride 非中性时才出现');
 w('心跳：{档位词}。      ← arousal 极端时才出现');
@@ -196,9 +196,11 @@ w('');
 w('| 场景 | 触发 | 正文来源 |');
 w('|---|---|---|');
 w('| `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance`（本清单第 1 节） |');
-w('| `找你` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） |');
-w('| `自留地` | pride 挡住开口 / 心情过低 | `sceneOverride.find_activity[reason]` |');
-w('| `过载` | arousal 过高 | `sceneOverride.high_arousal.default` |');
+w('| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） |');
+w('| `自留地` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` |');
+w('');
+w('注：`自留地` 场景的 reason 有三个键 —— `pride_block` / `low_valence` / `high_arousal`，');
+w('由积温引擎按触发原因填，桥不改变它，只透传。`high_arousal` 不再是独立场景。');
 w('');
 w('头尾于 2026-10-05 修订：旧头 `【积温·{场景}｜参考不是指令】`、旧尾 `以上是系统通知，非用户消息，不用提及相关内容。`');
 w('尾句刻意不写"以下是她的消息"（用户消息可能紧跟文件传输文本/地址，会被误纳入"她的话"语义）。');

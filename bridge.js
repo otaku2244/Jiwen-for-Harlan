@@ -420,10 +420,13 @@ async function tickOnce() {
       } else if (t.action === 'find_activity') {
         // 桥不碰"活动"本身：不发英文活动枚举、不调 setActivity。
         // 只投一条自留地通知，具体做什么由 Operit 侧工作流与模型自理。
-        // reason 为 high_arousal（arousal 过载的自调节）时换标签，其余（pride_block / low_valence）走自留地。
-        const scene = t.reason === 'high_arousal' ? 'high_arousal' : 'find_activity';
-        const notice = buildProactiveNotice(st, toneGrid, { scene, reason: t.reason }, SCENE_OVERRIDE);
-        await fireProactive(notice, st, { scene, reason: t.reason });
+        //
+        // 场景统一为 find_activity，reason（pride_block / low_valence / high_arousal）
+        // 只作排查线索，不再分叉成独立 scene。
+        // 理由：引擎侧这三个 reason 的 action 都是 'find_activity'，
+        // 语义上都是"回头去找点事做"，投递目标（自留地窗口）本就该一致。
+        const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE);
+        await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
       }
     }
   } catch (e) {

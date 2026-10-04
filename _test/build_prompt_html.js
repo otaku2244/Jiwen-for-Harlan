@@ -44,7 +44,7 @@ for (const raw of lines) {
   }
 }
 
-const URG_CN = { none: '悠闲', aware: '留意', urgent: '想念', desperate: '坐不住' };
+const URG_CN = { none: '悠闲', aware: '留意', urgent: '想念', desperate: '挡不住' };
 const MARK_CN = { '★覆盖:normal': '覆盖·过考虑线', '★覆盖:forced': '覆盖·过强制线' };
 
 let body = '';

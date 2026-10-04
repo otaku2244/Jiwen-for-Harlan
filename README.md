@@ -23,9 +23,9 @@
 
 ```
 内置定时器 tick → 越阈 → 按场景拼通知块
-  ├─ contact（找你）        ← connection 过线，挂 urgencyBoost 尾注
-  ├─ find_activity（自留地） ← pride 挡住开口 / 心情过低
-  └─ high_arousal（过载）    ← arousal 过高，自我调节
+  ├─ contact（找她）        ← connection 过线，挂 urgencyBoost 尾注
+  └─ find_activity（自留地） ← pride 挡住开口 / 心情过低 / arousal 过高
+       reason: pride_block / low_valence / high_arousal
   → 投递到 Operit 工作流（proactiveWebhook，作为一条 user 消息注入）
 ```
 
@@ -86,11 +86,13 @@
 | 场景标签 | 触发 | 正文来源 |
 |---|---|---|
 | `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance` |
-| `找你` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） |
-| `自留地` | pride 挡住开口 / 心情过低 | `sceneOverride.find_activity[reason]` |
-| `过载` | arousal 过高 | `sceneOverride.high_arousal.default` |
+| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） |
+| `自留地` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` |
 
-**为什么自留地/过载要独立尾注**：`urgencyBoost` 的 proactive 列语义是"想她了要发点什么"
+> `自留地` 的 reason 有三个键：`pride_block` / `low_valence` / `high_arousal`。
+> 由积温引擎按触发原因填，桥只透传，不再把 `high_arousal` 拆成独立场景。
+
+**为什么自留地要独立尾注**：`urgencyBoost` 的 proactive 列语义是"想她了要发点什么"
 （"她安静得有点久了…"），而自留地的语义是"她不在，这是我的时间"。若共用，自留地会挂上联系她的尾注，
 气质完全是反的。
 
@@ -303,7 +305,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
   "scene": "contact",
   "reason": null,
   "at": "2026-10-05T00:00:00.000Z",
-  "notice": "【积温·找你】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。",
+  "notice": "【积温·找她】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。",
   "state_summary": "[积温] c:0.42(想念) ...",
   "note": "请把 notice 内容作为系统侧消息注入对话，然后正常生成回复；不要提及通知本身的存在。"
 }
@@ -554,7 +556,7 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 |---|---|
 | Harlan 的语气（每档 pride 怎么说话） | `config/tone-harlan.json` 的 `profiles` |
 | 越线时的开口动机文案 | `config/tone-harlan.json` 的 `contactOverride` |
-| 自留地 / 过载场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
+| 自留地场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
 | 注入块里显示什么 | `lib/inject-text.js` |
