@@ -164,16 +164,28 @@ const jiwen = createJiwen({
   onLog: (msg) => log('JIWEN', msg),
 });
 
-// ── 注入节流（仿心潮此刻块：内容没变 N 秒内不重附）──
-let lastInjectedBlock = null;
+// ── 注入节流 ──
+//
+// 为什么不能只比 block 文本：
+//   block 是渲染后的档位词（"中性""平静"…），粒度远粗于五轴原值。
+//   valence 从 0 漂到 -0.03 仍是"中性"，文本一字不变 → 判为"没变" → 不注入。
+//   结果是积温明明在动、模型却看不到，30 分钟内只有第一轮带块。
+//
+// 所以指纹取**数值**而非文本：五轴各取 2 位小数拼成签名。
+//   · 签名变了 → 注入（哪怕渲染文本相同，状态语义已经不同）
+//   · 签名没变但超节流窗 → 注入（保持存在感）
+let lastInjectSig = null;
 let lastInjectAt = 0;
-function shouldInject(block) {
+function shouldInject(block, state) {
   const now = Date.now();
-  const changed = block !== lastInjectedBlock;
+  const sig = state
+    ? [state.connection, state.pride, state.valence, state.arousal]
+        .map((x) => (Number(x) || 0).toFixed(2)).join(',')
+    : block;
+  const changed = sig !== lastInjectSig;
   const expired = (now - lastInjectAt) > CFG.injectThrottleSeconds * 1000;
-  // 内容变了 → 注入；内容没变但超过节流窗 → 注入（保持存在感）
   if (changed || expired) {
-    lastInjectedBlock = block;
+    lastInjectSig = sig;
     lastInjectAt = now;
     return true;
   }
@@ -330,7 +342,7 @@ const server = http.createServer((req, res) => {
 
     // ── 3. 注入（带节流）──
     let injected = false;
-    if (block && shouldInject(block)) {
+    if (block && shouldInject(block, state)) {
       const r = injectIntoBody(body, block);
       body = r.body;
       injected = r.injected;
