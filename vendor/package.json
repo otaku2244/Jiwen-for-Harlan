@@ -1,0 +1,30 @@
+{
+  "name": "@clarashafiq/jiwen",
+  "version": "0.4.0",
+  "description": "积温 — 不靠概率骰子的 AI 角色主动意识引擎。五轴连续状态 + 数学漂移 + 阈值触发 + 参数模拟器",
+  "main": "jiwen.js",
+  "license": "MIT",
+  "files": [
+    "jiwen.js",
+    "simulate.js",
+    "tone-grid.js",
+    "README.md",
+    "GUIDE.md",
+    "CLAUDE.md"
+  ],
+  "keywords": [
+    "ai-companion",
+    "virtual-pet",
+    "emotion-engine",
+    "continuous-state",
+    "homeostasis",
+    "ai-character",
+    "npc-ai",
+    "affective-computing",
+    "simulation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ClaraShafiq/jiwen.git"
+  }
+}

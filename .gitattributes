@@ -1,0 +1,4 @@
+# 强制 shell 脚本用 LF（CRLF 会导致 VPS 上 bash 报 bad interpreter）
+*.sh text eol=lf
+# 其余按平台自动
+* text=auto
