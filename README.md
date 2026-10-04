@@ -116,7 +116,8 @@
 | `bridge.js` | 桥本体。反向代理 + 注入 + 判定器调度 + tick 定时器 |
 | `lib/inject-text.js` | 状态 → 「此刻块」/「自主唤醒通知」文本 |
 | `lib/tone-wrap.js` | **语调网格包装层**。修 pride/connection 脱节 |
-| `lib/analyzer.js` | 判定器。调 agnes-3.0-flash 出 delta |
+| `lib/mcp.js` | **MCP 服务**（Streamable HTTP / JSON-RPC）。给 Operit 定时拉通知 |
+| `lib/analyzer.js` | 判定器。调 deepseek-flash 出 delta |
 | `lib/env.js` | 极简 .env 解析 |
 | `config/tone-harlan.json` | **Harlan 语调网格**（9 簇 × 5 档 pride + contactOverride + sceneOverride）。核心人格皮肤 |
 | `config/persona-scope.md` | **分工边界**：世界书 / 积温 / 模型 三者职责划分 |
@@ -137,6 +138,8 @@
 | `_test/preview_notice.js` | 主动唤醒块成型版预览（6 例） |
 | `_test/simulate_loop.js` | **闭环模拟**：真判定器 + 7 天语料 → CSV |
 | `_test/anger_check.js` | **真生气 vs 敷衍判别专项**（5 例） |
+| `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
+| `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
 
 ---
 
@@ -210,6 +213,86 @@ tail -f /root/jiwen-bridge/data/bridge.log
 
 ---
 
+## 五之二、MCP 服务（主动唤醒的投递通道）
+
+### 为什么需要它
+
+积温的 proactive 是**引擎主动触发**（越阈 → 要开口）。但：
+
+```
+Operit 在手机（NAT / 移动网络）  ←→  桥在 VPS
+```
+
+**VPS 无法主动敲开手机的门。** 所以"推"这条路走不通，只能让 Operit 反过来"拉"。
+
+MCP 服务就是这个"拉"的接口。tick 触发时通知不再直接 POST，而是**入队**；Operit 的定时工作流调用 `get_pending_notice` 取走并清空。
+
+### 端点
+
+```
+POST http://154.21.200.74:18220/mcp
+Authorization: Bearer <BRIDGE_TOKEN>
+Content-Type: application/json
+```
+
+- 走 **Streamable HTTP**（JSON-RPC 2.0），一问一答，不开 SSE 长连接。
+- 与聊天代理**共用同一端口**，只认 `/mcp` 这一个路径，互不干扰。
+- 鉴权复用桥的 `BRIDGE_TOKEN`。
+
+### 三个工具
+
+| 工具 | 用途 | 调用时机 |
+|---|---|---|
+| `get_pending_notice` | **取走**待投递的主动通知（空则 `has_notice=false`） | **定时工作流主入口** |
+| `get_status` | 查五轴摘要 + 运行态（静默/日限额/开关） | 调试，或让模型感知状态 |
+| `explain_silence` | "他为什么没开口"（决策轨迹 + 一句话解释） | 排查 |
+
+**只有 `get_pending_notice` 是必需的**，后两个是诊断用。
+
+### 返回值形态
+
+有通知时：
+
+```json
+{
+  "has_notice": true,
+  "count": 1,
+  "scene": "contact",
+  "reason": null,
+  "at": "2026-10-05T00:00:00.000Z",
+  "notice": "【积温·找你｜参考不是指令】\n心情：中性。\n以上是系统通知，非用户消息，不用提及相关内容。",
+  "state_summary": "[积温] c:0.42(想念) ...",
+  "note": "请把 notice 内容作为系统侧消息注入对话，然后正常生成回复；不要提及通知本身的存在。"
+}
+```
+
+无通知时：
+
+```json
+{ "has_notice": false, "count": 0, "note": "当前没有待投递的主动唤醒通知。本次无需任何动作。" }
+```
+
+> `notice` 里**已自带边界句**，模型读到就知道这是系统侧材料、不用回应它本身。
+
+### 队列行为
+
+| 项 | 值 |
+|---|---|
+| 取走即清空 | 同一条通知只返回一次（`peek: true` 可只查不取） |
+| 上限 | 20 条，超出丢最旧（防 Operit 长期不来导致堆积） |
+| 存储 | 进程内存（桥常驻单实例，够用） |
+| 筛选 | 入队前已过**静默时段**与**日上限**闸门 |
+
+### Operit 侧怎么接
+
+工作流配置为**定时触发**（间隔建议 10~30 分钟），动作：调 `get_pending_notice` → 若 `has_notice=true` 则把 `notice` 注入对话并生成回复；否则直接结束。
+
+### 与 webhook 的关系
+
+`PROACTIVE_WEBHOOK` 保留但**默认留空**。只有当 Operit 确实存在"可被外部 POST"的入口时才需要填。正常情况下走 MCP 队列即可，不需要它。
+
+---
+
 ## 六、状态文件与运维
 
 | 项 | 位置 |
@@ -241,6 +324,36 @@ tail -f /root/jiwen-bridge/data/bridge.log
 
 - **真机未跑过**。首次部署后请看第一轮日志的 `inject=true` 和 `delta applied`
 - RP 语境的「贺董」豁免单独用例未跑（额度耗尽），逻辑已写入 prompt
+
+---
+
+## 七之四、注入节流（重要，2026-10-05 修）
+
+**问题现象**：真实聊天里只有每半小时第一轮带积温块，之后全是 `inject=false`。
+
+**根因**：节流比较的是 **block 渲染文本**，而档位词粒度远粗于数值。
+
+```
+labelValence(-0.03) === '中性'
+labelValence(0)     === '中性'     →  渲染出的块逐字相同
+```
+
+状态明明在漂（`0 → -0.03 → -0.01`），但渲染文本一字不变 → 判为"没变" → 静默跳过。
+
+**修法**：指纹取**数值**，不取文本。
+
+```js
+// bridge.js
+const sig = [state.connection, state.pride, state.valence, state.arousal]
+  .map((x) => (Number(x) || 0).toFixed(2)).join(',');
+const changed = sig !== lastInjectSig;
+```
+
+模型看到的文本还是「心情：中性」，但**只要数值动了就重注**。2 位小数 = 状态可感知变化阈值。
+
+**验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 15/15；VPS 实测连续三轮 `inject=true`（档位词全程未变）。
+
+**遗留观察点**：`connection` 每轮被 `resetConnection()` 清零，导致「想念」轴在频繁聊天时永远涨不起来（需靠 tick 的时间累积，`CONNECTION_RATE=0.0007/min` ≈ 24 小时涨满）。真实节奏下是否合适，待长时间观察。
 
 ---
 
@@ -380,11 +493,15 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 原因：积温 connection 范围 0~1、delta 上限 -0.5，且桥每轮已自动 `resetConnection()`，
 判定器再给负值是重复扣减。
 
-### 8.2 自主唤醒的投递地址（可选）
+### 8.2 自主唤醒的投递 —— 已定：走 MCP 队列 ✅
 
-如果你想启用主动唤醒，需要把 `PROACTIVE_WEBHOOK` 指向一个能在 Operit 里收消息的端点。
+原方案考虑过 `PROACTIVE_WEBHOOK` 直推，但**物理上走不通**：Operit 在手机（NAT 后面），VPS 敲不开它的门。
 
-**注意**：这条链路和 revive-operit 那套不同——那个是 Operit 主动拉取，这个是桥主动推送。**Operit 需要有一个能接收外部 POST 的入口**，否则只能写日志。**如果你不确定 Operit 有没有这样的入口，先留空**，唤醒通知会写进日志，你可以先观察它的质量和频率，再决定怎么投递。
+**已改为 MCP 队列模式**（见「五之二、MCP 服务」）：tick 触发 → 通知入队 → Operit 定时调 `get_pending_notice` 取走。
+
+`PROACTIVE_WEBHOOK` 保留但**默认留空**，仅当 Operit 确实有对外 POST 入口时才用。
+
+**Operit 侧待办**：配置一个定时（10~30 分钟）工作流，动作是调 `get_pending_notice`；有通知就注入对话生成回复，没有就结束。
 
 ---
 
@@ -398,7 +515,10 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
 | 注入块里显示什么 | `lib/inject-text.js` |
+| 注入节流（多久重注一次） | `bridge.js` 的 `shouldInject` / `.env` 的 `INJECT_THROTTLE_SECONDS` |
+| MCP 工具的描述或返回值 | `lib/mcp.js` 的 `buildToolDefs` / `callTool` |
 | 换判定器模型 | `.env` 的 `LLM_BASE` / `LLM_KEY` / `LLM_MODEL` / `LLM_DISABLE_THINKING` |
 | 看判定器实际表现 | `node _test/simulate_loop.js`（闭环）或 `analyze_check.js`（单例） |
+| 验 MCP 协议是否正常 | `node _test/mcp_check.js`（31 例，不起真桥） |
 
 **校准方法**：跑两天，翻 `bridge.log`，找那些"这句语气不对"的地方，看当时 `[TICK]` 行的五轴值落在哪一档，改对应的格子。改完跑 `node _test/build_prompt_html.js` 重新生成清单对照。

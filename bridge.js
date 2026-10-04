@@ -28,6 +28,7 @@ const { createToneWrapper } = require('./lib/tone-wrap.js');
 const { buildInjectionBlock, buildProactiveNotice } = require('./lib/inject-text.js');
 const { analyzeDialog } = require('./lib/analyzer.js');
 const { loadEnvFile } = require('./lib/env.js');
+const { createMcpHandler } = require('./lib/mcp.js');
 
 // ── 载入 .env（同目录）────────────────────────────
 loadEnvFile(path.join(__dirname, '.env'));
@@ -55,6 +56,8 @@ const CFG = {
   proactiveMaxPerDay: parseInt(process.env.PROACTIVE_MAX_PER_DAY || '6', 10),
   quietStart: parseInt(process.env.QUIET_START || '0', 10),
   quietEnd: parseInt(process.env.QUIET_END || '8', 10),
+  mcpEnabled: (process.env.MCP_ENABLED || 'true') !== 'false',
+  mcpPath: process.env.MCP_PATH || '/mcp',
 };
 
 // ── 日志 ──────────────────────────────────────────
@@ -297,7 +300,8 @@ const server = http.createServer((req, res) => {
   // 鉴权
   const auth = req.headers['authorization'] || '';
   const given = auth.replace(/^Bearer\s+/i, '');
-  if (CFG.token && given !== CFG.token) {
+  const authOk = !CFG.token || given === CFG.token;
+  if (!authOk) {
     res.writeHead(401, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'unauthorized' } }));
     return;
@@ -308,6 +312,21 @@ const server = http.createServer((req, res) => {
   req.on('data', (c) => chunks.push(c));
   req.on('end', async () => {
     let bodyBuf = Buffer.concat(chunks);
+
+    // ── MCP 端点（Streamable HTTP）──
+    // 与聊天转发互不干扰：只认这一个路径，其余原样走代理逻辑。
+    if (mcp && u.pathname === CFG.mcpPath) {
+      try {
+        await mcp.handleHttp(req, res, bodyBuf, true);
+      } catch (e) {
+        log('ERROR', 'mcp handler failed: ' + e.message);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+        }
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'internal error' } }));
+      }
+      return;
+    }
 
     // 只对 chat completions 类路径做注入
     const isChat = /\/v1\/chat\/completions$/.test(u.pathname) || /\/chat\/completions$/.test(u.pathname);
@@ -390,7 +409,7 @@ async function tickOnce() {
     for (const t of actionable) {
       if (t.action === 'contact') {
         const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE);
-        await fireProactive(notice, st);
+        await fireProactive(notice, st, { scene: 'contact' });
         // 开口 ≠ 被回复：部分缓解
         await jiwen.applyDelta({ connection: -0.35 });
       } else if (t.action === 'find_activity') {
@@ -399,7 +418,7 @@ async function tickOnce() {
         // reason 为 high_arousal（arousal 过载的自调节）时换标签，其余（pride_block / low_valence）走自留地。
         const scene = t.reason === 'high_arousal' ? 'high_arousal' : 'find_activity';
         const notice = buildProactiveNotice(st, toneGrid, { scene, reason: t.reason }, SCENE_OVERRIDE);
-        await fireProactive(notice, st);
+        await fireProactive(notice, st, { scene, reason: t.reason });
       }
     }
   } catch (e) {
@@ -423,11 +442,27 @@ function inQuietHours() {
   return h >= s || h < e; // 跨午夜
 }
 
-async function fireProactive(notice, state) {
+async function fireProactive(notice, state, meta) {
   if (inQuietHours()) { log('INFO', 'proactive blocked by quiet hours'); return; }
   if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return; }
   sendCountToday++;
   log('SEND', 'proactive notice:\n' + notice);
+
+  // ── 投递路径 1：MCP 队列（Operit 定时来拉）──
+  // VPS 敲不开手机的门，所以主路径是"拉"：入队，等 Operit 调 get_pending_notice 取走。
+  if (CFG.mcpEnabled && mcp) {
+    mcp.pushNotice({
+      scene: (meta && meta.scene) || 'contact',
+      reason: (meta && meta.reason) || null,
+      at: new Date().toISOString(),
+      notice,
+      stateSummary: jiwen.getStateSummary(),
+    });
+    log('INFO', `proactive queued for MCP pull (pending=${mcp.pendingCount()})`);
+  }
+
+  // ── 投递路径 2（可选）：webhook 直推 ──
+  // 仅在用户确认 Operit 有对外 POST 入口时才配 PROACTIVE_WEBHOOK。
   if (!CFG.proactiveWebhook) return;
   try {
     const u = new URL(CFG.proactiveWebhook);
@@ -453,6 +488,24 @@ async function fireProactive(notice, state) {
   }
 }
 
+// ── MCP 服务（给 Operit 工作流"拉"通知用）─────────
+const mcp = CFG.mcpEnabled ? createMcpHandler({
+  getSummary: () => jiwen.getStateSummary(),
+  getState: () => jiwen.getState(),
+  getTrace: () => jiwen.getTriggerTrace(),
+  explain: () => jiwen.explainTrigger(),
+  getRuntimeInfo: () => ({
+    proactive_enabled: CFG.proactiveEnabled,
+    in_quiet_hours: inQuietHours(),
+    quiet_range: [CFG.quietStart, CFG.quietEnd],
+    sent_today: sendCountToday,
+    daily_limit: CFG.proactiveMaxPerDay,
+    inject_enabled: CFG.injectEnabled,
+    tick_minutes: CFG.tickMinutes,
+  }),
+  log,
+}) : null;
+
 // ── 启动 ──────────────────────────────────────────
 (async () => {
   await jiwen.load();
@@ -462,6 +515,7 @@ async function fireProactive(notice, state) {
   server.listen(CFG.port, CFG.host, () => {
     log('INFO', `bridge listening on ${CFG.host}:${CFG.port} → ${CFG.upstreamBase}`);
     log('INFO', `inject=${CFG.injectEnabled} proactive=${CFG.proactiveEnabled} tick=${CFG.tickMinutes}min`);
+    if (mcp) log('INFO', `MCP endpoint: http://${CFG.host}:${CFG.port}${CFG.mcpPath} (Streamable HTTP, 3 tools)`);
   });
 
   tickTimer = setInterval(tickOnce, CFG.tickMinutes * 60 * 1000);
