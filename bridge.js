@@ -287,8 +287,13 @@ function forward(pathname, search, method, headers, bodyBuf, res) {
 }
 
 // ── 主服务 ────────────────────────────────────────
-const server = http.createServer((req, res) => {
-  const u = new URL(req.url, 'http://localhost');
+const server = http.createServer((req, res) => {  const u = new URL(req.url, 'http://localhost');
+
+  // ⚠️ Node 默认 requestTimeout=300s，会在 5 分钟后掐断 MCP 的 SSE 长连接。
+  //    心跳（25s 一次）能保活，但服务端这个硬超时是另一回事，必须关掉。
+  //    这里对所有请求放宽到 0（不超时）；聊天转发是短请求，不受影响。
+  req.setTimeout(0);
+  if (res.setTimeout) res.setTimeout(0);
 
   // 健康检查
   if (u.pathname === '/bridge/health') {
@@ -517,6 +522,11 @@ const mcp = CFG.mcpEnabled ? createMcpHandler({
     log('INFO', `inject=${CFG.injectEnabled} proactive=${CFG.proactiveEnabled} tick=${CFG.tickMinutes}min`);
     if (mcp) log('INFO', `MCP endpoint: http://${CFG.host}:${CFG.port}${CFG.mcpPath} (Streamable HTTP, 3 tools)`);
   });
+  // SSE 长连接需要无限期保持；HTTP 层其余超时对短请求无意义。
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.keepAliveTimeout = 0;
+  server.timeout = 0;
 
   tickTimer = setInterval(tickOnce, CFG.tickMinutes * 60 * 1000);
   if (tickTimer.unref) tickTimer.unref();

@@ -32,20 +32,33 @@ function check(name, cond, extra) {
 }
 
 function makeRes() {
-  const r = { code: null, headers: null, body: '', ended: false };
+  const r = {
+    code: null, headers: null, body: '', ended: false,
+    chunks: [], listeners: {},
+  };
   r.writeHead = (c, h) => { r.code = c; r.headers = h || null; };
+  r.write = (b) => { r.chunks.push(b.toString()); return true; };
   r.end = (b) => { if (b) r.body = b.toString(); r.ended = true; };
+  r.on = (ev, fn) => { (r.listeners[ev] = r.listeners[ev] || []).push(fn); };
+  r.emit = (ev) => { (r.listeners[ev] || []).forEach((f) => f()); };
+  r.stream = () => r.chunks.join('');
   return r;
+}
+function makeReq(method, headers) {
+  const req = { method: method || 'POST', headers: headers || {}, listeners: {} };
+  req.on = (ev, fn) => { (req.listeners[ev] = req.listeners[ev] || []).push(fn); };
+  req.emit = (ev) => { (req.listeners[ev] || []).forEach((f) => f()); };
+  return req;
 }
 async function call(payload, opts) {
   const o = opts || {};
   const res = makeRes();
-  const req = { headers: o.headers || {} };
+  const req = makeReq(o.method || 'POST', o.headers || {});
   const buf = Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload), 'utf8');
   await mcp.handleHttp(req, res, buf, o.authOk !== false);
   let json = null;
   try { json = res.body ? JSON.parse(res.body) : null; } catch (_) {}
-  return { res, json };
+  return { res, json, req };
 }
 
 (async () => {
@@ -188,6 +201,83 @@ async function call(payload, opts) {
     const all = mcp.takeNotices();
     check('⑭ 保留的是最新的', all[0].notice === 'N5' && all[19].notice === 'N24',
       { first: all[0].notice, last: all[19].notice });
+  }
+
+  // ══════ Streamable HTTP 兼容性（对齐官方 kotlin-sdk 客户端）══════
+
+  // ⑮ 响应必须带 mcp-session-id 头
+  {
+    const { res } = await call({ jsonrpc: '2.0', id: 20, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'o', version: '1' } } });
+    check('⑮ initialize 响应带 mcp-session-id', !!(res.headers && res.headers['mcp-session-id']),
+      res.headers);
+  }
+
+  // ⑯ 会话 ID 稳定（同一会话内多次请求一致）
+  {
+    const a = await call({ jsonrpc: '2.0', id: 21, method: 'ping' });
+    const b = await call({ jsonrpc: '2.0', id: 22, method: 'ping' });
+    const ida = a.res.headers && a.res.headers['mcp-session-id'];
+    const idb = b.res.headers && b.res.headers['mcp-session-id'];
+    check('⑯ 会话 ID 跨请求稳定', !!ida && ida === idb, { ida, idb });
+  }
+
+  // ⑰ notifications/initialized → 202 + session 头（客户端据此发起 GET SSE）
+  {
+    const { res } = await call({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    check('⑰ initialized 返回 202', res.code === 202, res.code);
+    check('⑰ 202 带 mcp-session-id（GET 拿流时需一致）',
+      !!(res.headers && res.headers['mcp-session-id']), res.headers);
+  }
+
+  // ⑱ GET → SSE 长连接
+  {
+    const { res, req } = await call(null, { method: 'GET' });
+    check('⑱ GET 返回 200', res.code === 200, res.code);
+    check('⑱ content-type 为 text/event-stream',
+      !!(res.headers && /text\/event-stream/.test(res.headers['content-type'])), res.headers);
+    check('⑱ 禁用缓冲（x-accel-buffering）',
+      !!(res.headers && res.headers['x-accel-buffering'] === 'no'), res.headers);
+    check('⑱ 未立刻结束（保持长连接）', res.ended === false, res.ended);
+    check('⑱ 建流即写入 SSE 注释帧', res.stream().includes(': jiwen-bridge MCP stream open'),
+      res.stream().slice(0, 60));
+    check('⑱ 活跃流计数为 1', mcp.activeStreams() === 1, mcp.activeStreams());
+
+    // broadcast（服务器主动推）能到这条流
+    mcp.broadcast({ jsonrpc: '2.0', method: 'notifications/message' });
+    check('⑱ broadcast 写入该流', res.stream().includes('notifications/message'),
+      res.stream().slice(0, 200));
+
+    // 断开后回收
+    req.emit('close');
+    check('⑱ 断开后活跃流归零', mcp.activeStreams() === 0, mcp.activeStreams());
+  }
+
+  // ⑲ 多流并存与独立回收
+  {
+    const a = await call(null, { method: 'GET' });
+    const b = await call(null, { method: 'GET' });
+    check('⑲ 两条流并存', mcp.activeStreams() === 2, mcp.activeStreams());
+    mcp.broadcast({ jsonrpc: '2.0', method: 'notifications/message' });
+    check('⑲ broadcast 同时到达两条流',
+      a.res.stream().includes('notifications/message') &&
+      b.res.stream().includes('notifications/message'), null);
+    a.req.emit('close');
+    check('⑲ 关一条剩一条', mcp.activeStreams() === 1, mcp.activeStreams());
+    b.req.emit('close');
+    check('⑲ 全关归零', mcp.activeStreams() === 0, mcp.activeStreams());
+  }
+
+  // ⑳ DELETE → 204
+  {
+    const { res } = await call(null, { method: 'DELETE' });
+    check('⑳ DELETE 返回 204', res.code === 204, res.code);
+  }
+
+  // ㉑ GET 未授权 → 401（SSE 也不能裸奔）
+  {
+    const { res } = await call(null, { method: 'GET', authOk: false });
+    check('㉑ GET 无 token 返回 401', res.code === 401, res.code);
   }
 
   console.log(`\n${pass}/${total} 通过`);

@@ -230,14 +230,50 @@ MCP 服务就是这个"拉"的接口。tick 触发时通知不再直接 POST，�
 ### 端点
 
 ```
-POST http://154.21.200.74:18220/mcp
+POST http://154.21.200.74:18220/mcp     ← JSON-RPC（工具调用走这里）
+GET  http://154.21.200.74:18220/mcp     ← SSE 长连接（客户端建流用）
+DELETE http://154.21.200.74:18220/mcp   ← 会话终止
 Authorization: Bearer <BRIDGE_TOKEN>
-Content-Type: application/json
 ```
 
-- 走 **Streamable HTTP**（JSON-RPC 2.0），一问一答，不开 SSE 长连接。
+- 走 **Streamable HTTP**（JSON-RPC 2.0）。**三种方法都要支持**，见下方"为什么 GET 不能省"。
 - 与聊天代理**共用同一端口**，只认 `/mcp` 这一个路径，互不干扰。
 - 鉴权复用桥的 `BRIDGE_TOKEN`。
+
+### 客户端握手序列（对齐官方 SDK）
+
+Operit 用的是 `modelcontextprotocol/kotlin-sdk` 的 `StreamableHttpClientTransport`（**严格实现**）。它的序列是：
+
+| 步 | 请求 | 期望响应 |
+|---|---|---|
+| 1 | `POST` `initialize` | `200 application/json` + **`mcp-session-id` 头** |
+| 2 | `POST` `notifications/initialized` | **`202 Accepted`**（无正文） |
+| 3 | **`GET`**（收到 202 后立即发起） | **`200 text/event-stream`**，保持长连接 |
+| 4 | `POST` `tools/list` / `tools/call` | `200 application/json` |
+| 5 | `DELETE`（断开时） | `204` |
+
+### ⚠️ 为什么 GET 不能省
+
+官方客户端源码（`StreamableHttpClientTransport.performSend`）：
+
+```kotlin
+if (response.status == HttpStatusCode.Accepted) {
+    if (message is JSONRPCNotification && message.method == "notifications/initialized") {
+        startSseSession(...)   // ← 立刻发起 GET 建 SSE
+    }
+    return
+}
+```
+
+**第 2 步收到 202 后，客户端一定会发 GET。** 如果 GET 返回 404/405，它会按退避重试到 `maxRetries`，然后抛：
+
+```
+StreamableHttpError: Maximum reconnection attempts exceeded
+```
+
+→ `connect()` 直接失败，工具一个都列不出来。
+
+同理，`server.requestTimeout` 是 Node 默认的 **300 秒**，会在 5 分钟后掐断 SSE。桥里已显式置零，并加 25 秒心跳保活。
 
 ### 三个工具
 
