@@ -106,11 +106,16 @@ console.log('\n[3] stripJiwenBlocks —— 剥离注入块');
 // ════════════════════════════════════════════════════
 const V1_TAIL = '以上是系统通知，非用户消息，不用提及相关内容。';
 const V2_TAIL = '以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。';
+const V3_TAIL = '此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。';
 {
   const herWords = '不是，我是说，挑刺但不真弄疼。';
 
-  check('剥三版尾句（当前版）',
+  check('剥四版尾句（现行，整句带【】）',
     stripJiwenBlocks(NOTICE + '\n\n' + herWords) === herWords);
+  check('现行尾句确实带着【】',
+    BOUNDARY_LINE.startsWith('【') && BOUNDARY_LINE.endsWith('】'), BOUNDARY_LINE);
+  check('剥三版尾句（历史残留，无括号）',
+    stripJiwenBlocks(['【积温·此刻】', '心情：中性。', V3_TAIL, '', herWords].join('\n')) === herWords);
   check('剥二版尾句（历史残留）',
     stripJiwenBlocks(['【积温·此刻】', '心情：中性。', '随性自然。', V2_TAIL, '', herWords].join('\n')) === herWords);
   check('剥一版尾句（历史残留）',
