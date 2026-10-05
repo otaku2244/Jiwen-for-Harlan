@@ -25,7 +25,8 @@ const { URL } = require('url');
 const { createJiwen } = require('./vendor/jiwen.js');
 const { createToneGrid } = require('./vendor/tone-grid.js');
 const { createToneWrapper } = require('./lib/tone-wrap.js');
-const { buildInjectionBlock, buildProactiveNotice } = require('./lib/inject-text.js');
+const { buildInjectionBlock, buildProactiveNotice, stripJiwenBlocks } = require('./lib/inject-text.js');
+const { createLoopbackGuard } = require('./lib/loopback.js');
 const { analyzeDialog } = require('./lib/analyzer.js');
 const { loadEnvFile } = require('./lib/env.js');
 const { createMcpHandler } = require('./lib/mcp.js');
@@ -163,6 +164,11 @@ try {
   toneGrid = createToneWrapper(createToneGrid());
 }
 
+// ── 回环守卫 ──────────────────────────────────────
+// 记住自己发出去的主动唤醒通知，供请求侧的 claim() 认领。
+// 详见 lib/loopback.js 顶部注释。
+const loopbackGuard = createLoopbackGuard();
+
 // ── 积温实例（全局唯一）──────────────────────────
 const jiwen = createJiwen({
   getLastMessage: () => null, // 桥不依赖此回调，由判定器独立取历史
@@ -257,6 +263,10 @@ function extractRecentDialog(body, n) {
     else if (Array.isArray(m.content)) {
       text = m.content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n');
     }
+    // ⚠️ 必须剥掉积温块再入队。
+    //    积温块是拼进 user 正文的，不剥就等于让判定器读自己上一轮的输出，
+    //    形成"状态 → 文本 → 判定器 → 状态"的自我锚定闭环。
+    text = stripJiwenBlocks(text);
     if (!text) continue;
     out.push({ role: m.role, text: text.slice(0, 800) });
   }
@@ -362,10 +372,17 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
       return;
     }
 
-    // ── 1. 用户开口 → resetConnection（任何窗口都触发）──
-    try {
-      await jiwen.resetConnection();
-    } catch (e) { log('WARN', 'resetConnection failed: ' + e.message); }
+    // ── 0. 回环识别：这条是不是桥自己发出去的主动唤醒通知？──
+    //   通知经 Operit 工作流包装成 user 消息回流，桥若不识别会把它当成"她开口了"。
+    //   识别到就说明她一个字都没说，只是一个系统侧回环。
+    const loopback = loopbackGuard.claim(extractLastUserText(body));
+
+    // ── 1. 用户开口 → resetConnection（只有真人开口才触发）──
+    if (!loopback) {
+      try {
+        await jiwen.resetConnection();
+      } catch (e) { log('WARN', 'resetConnection failed: ' + e.message); }
+    }
 
     // ── 2. 取状态 → 生成此刻块 ──
     let state = {};
@@ -377,7 +394,12 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
       log('WARN', 'build block failed: ' + e.message);
     }
 
-    // ── 3. 注入（带节流）──
+    // ── 3. 判定器输入：必须在注入之前取 ──
+    //   injectIntoBody 会直接改写最后一条 user 消息；若先注入再取，
+    //   判定器读到的就是"这份积温块 + 她的真话"，等于拿自己的输出喂自己。
+    const dialog = extractRecentDialog(body, 4);
+
+    // ── 4. 注入（带节流）──
     let injected = false;
     if (block && shouldInject(block, state)) {
       const r = injectIntoBody(body, block);
@@ -386,11 +408,13 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     }
     const outBuf = Buffer.from(JSON.stringify(body), 'utf8');
 
-    log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'} | ${jiwen.getStateSummary()}`);
+    const loopTag = loopback
+      ? ` LOOPBACK=${loopback.scene} age=${Math.round((Date.now() - loopback.at) / 1000)}s`
+      : '';
+    log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'}${loopTag} | ${jiwen.getStateSummary()}`);
 
-    // ── 4. 异步喂判定器（不阻塞转发）──
-    const dialog = extractRecentDialog(body, 4);
-    if (dialog.length >= 2 && CFG.llmKey) {
+    // ── 5. 异步喂判定器（不阻塞转发；仅真人开口才喂）──
+    if (!loopback && dialog.length >= 2 && CFG.llmKey) {
       setImmediate(() => {
         analyzeDialog(dialog, { ...CFG, log }).then((delta) => {
           if (delta) {
@@ -401,7 +425,7 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
       });
     }
 
-    // ── 5. 转发 ──
+    // ── 6. 转发 ──
     forward(u.pathname, u.search, req.method, req.headers, outBuf, res);
   });
 });
@@ -467,6 +491,14 @@ async function fireProactive(notice, state, meta) {
   if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return; }
   sendCountToday++;
   log('SEND', 'proactive notice:\n' + notice);
+
+  // ── 回环登记：这条通知回流时，请求侧的 claim() 要靠它认出"她没有开口" ──
+  // 必须在任何投递之前登记，否则投递快于登记就会出现认领不到的窗口。
+  loopbackGuard.remember({
+    scene: (meta && meta.scene) || 'contact',
+    reason: (meta && meta.reason) || null,
+    notice,
+  });
 
   // ── 投递路径 1：MCP 队列（Operit 定时来拉）──
   // VPS 敲不开手机的门，所以主路径是"拉"：入队，等 Operit 调 get_pending_notice 取走。

@@ -139,7 +139,8 @@
 | 文件 | 作用 |
 |---|---|
 | `bridge.js` | 桥本体。反向代理 + 注入 + 判定器调度 + tick 定时器 |
-| `lib/inject-text.js` | 状态 → 「此刻块」/「自主唤醒通知」文本 |
+| `lib/inject-text.js` | 状态 → 「此刻块」/「自主唤醒通知」文本 + `stripJiwenBlocks()`（剥离积温块） |
+| `lib/loopback.js` | **回环守卫**。认出"这条 user 消息其实是桥自己发出去的通知" |
 | `lib/tone-wrap.js` | **语调网格包装层**。修 pride/connection 脱节 |
 | `lib/mcp.js` | **MCP 服务**（Streamable HTTP / JSON-RPC）。给 Operit 定时拉通知 |
 | `lib/analyzer.js` | 判定器。调 deepseek-flash 出 delta |
@@ -167,6 +168,7 @@
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
 | `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
+| `_test/loopback_check.js` | **回环守卫专项**（41 例）：认领命中/一次性/TTL/剥离三版尾句/源码顺序断言 |
 
 ---
 
@@ -354,6 +356,66 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 ### 与 webhook 的关系
 
 `PROACTIVE_WEBHOOK` 保留但**默认留空**。只有当 Operit 确实存在"可被外部 POST"的入口时才需要填。正常情况下走 MCP 队列即可，不需要它。
+
+---
+
+## 五之三、回环守卫（重要，2026-10-06 修）
+
+### 问题
+
+主动唤醒的形态是：桥 tick 越阈 → 生成积温块 → MCP 队列 → Operit 工作流把 notice
+原文当一条 **user 消息**注入对话 → 该请求又打回桥（桥是 Serein 前面的反向代理，
+只要模型被调用就必经此处）。
+
+于是桥看到一个"她开口了"的请求，**可实际上她什么都没说**。不识别就犯三个错：
+
+| # | 症状 | 位置 |
+|---|---|---|
+| ① | 多余执行 `resetConnection()`，把 connection 硬归 0，抹掉这次唤醒本身的意义 | `bridge.js` 请求主流程 |
+| ② | 把唤醒通知当"她的发言"喂给判定器打分 → 凭空产生一次错误漂移 | 同上 |
+| ③ | **判定器每轮读到桥自己注入的此刻块**（最普遍，与唤醒无关） | `extractRecentDialog` 的调用顺序 |
+
+③ 的成因：`injectIntoBody` 会直接改写最后一条 user 消息。若先注入、后取 dialog，
+判定器读到的就是"这份积温块 + 她的真话"，等于拿自己的输出喂自己，
+形成 `状态 → 文本 → 判定器 → 状态` 的自我锚定闭环。
+
+### 修法
+
+**A · 回环认领**（`lib/loopback.js`）
+
+桥记住自己发出去的通知原文（`fireProactive` 里 `remember`），请求进来时按原文
+`claim`。归一化去掉全部空白再比对，Operit 加前缀/后缀/压换行都不影响命中。
+`claimed` 保证一条只豁免一次；TTL 2 小时 + 上限 20 条，杜绝陈旧文本被误认。
+
+```js
+const loopback = loopbackGuard.claim(extractLastUserText(body));
+if (!loopback) await jiwen.resetConnection();          // 只有真人开口才重置
+...
+if (!loopback && dialog.length >= 2 && CFG.llmKey) {   // 只有真人开口才喂判定器
+```
+
+命中时日志里会出现 `LOOPBACK=contact age=63s`，可用于核对真实回环间隔。
+
+**B · 判定器只读「注入前」的对话**
+
+1. `const dialog = extractRecentDialog(body, 4);` 提到 `injectIntoBody` **之前**；
+2. `extractRecentDialog` 内先过 `stripJiwenBlocks()`，把历史里带进来的旧块剔掉
+   （三版尾句都认，尾句缺失时按空行兜底）。
+
+### 未做（待定）
+
+回环时**仍然会**注入一次此刻块，所以"同一状态出现两次"这点还在：通知里的块来自
+tick 时刻的快照，桥注入的块来自请求时刻。两者可能跨档（实测有
+`08:04 c:0.35(想念)` → `08:34 c:0.02(悠闲)` 的案例）。去重方案三条：
+① 回环豁免（零重复，快照可能陈旧）；② **分工切割**——通知只留正文+出口说明、
+去掉档位行，桥只补实时档位行；③ 通知瘦身成纯触发信号（丢现场感）。
+
+### 已知残留
+
+积温块是拼进 user 正文的，会被 Serein 存进 `raw_events` 并记成**她的消息**
+（实测 8435 条里 71 条含"积温"，其中 user 43 / assistant 28）。
+影响语义检索与新窗口续接材料。治本方案是让块走独立的 `role:'system'` 消息，
+但需先确认 Serein 网关与上游接受 messages 中段出现 system。
 
 ---
 
