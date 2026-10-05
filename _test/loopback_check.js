@@ -2,19 +2,23 @@
 // 回环守卫 / 积温块剥离 专项测试。
 // 用法：node _test/loopback_check.js
 //
-// 守的是三个 bug：
+// 守的是四个 bug：
 //   ① 唤醒通知回流时被当成"她开口了" → 多余 resetConnection
 //   ② 唤醒通知被当成她的发言喂给判定器
 //   ③ 桥自己注入的此刻块被判定器读到（每轮发生，最普遍）
+//   ④ 回环轮把 reactive 语域的此刻块叠在 proactive 语域的通知上（语域打架 + 档位行两套快照）
 //
 // 前两个由 lib/loopback.js 守，第三个由 lib/inject-text.js 的 stripJiwenBlocks
-// 加上 bridge.js 里的「先取 dialog 再注入」顺序共同守。最后一段是源码顺序断言。
+// 加上 bridge.js 里的「先取 dialog 再注入」顺序共同守，第四个由 bridge.js 的
+// 「回环让位」注入条件守（[5]/[6] 两段）。最后一段是源码顺序断言。
 
 const fs = require('fs');
 const path = require('path');
 
 const { createLoopbackGuard, normText } = require('../lib/loopback.js');
-const { stripJiwenBlocks, BOUNDARY_LINE } = require('../lib/inject-text.js');
+const { stripJiwenBlocks, assertBlockShape, buildProactiveNotice, BOUNDARY_LINE } = require('../lib/inject-text.js');
+const { createToneGrid } = require('../vendor/tone-grid.js');
+const { createToneWrapper } = require('../lib/tone-wrap.js');
 
 let pass = 0, total = 0;
 function check(name, cond, extra) {
@@ -177,6 +181,39 @@ console.log('\n[5] bridge.js 顺序断言（防回归）');
     /if\s*\(!loopback && dialog\.length/.test(src));
   check('fireProactive 里有 remember',
     /loopbackGuard\.remember\(/.test(src));
+  // ── 方案 A：回环让位，不注入此刻块 ──
+  //   回环那轮的 user 消息就是通知原文（自带档位行 + proactive 正文 + 出口说明），
+  //   此刻块是 reactive 语域、且档位行是衰减后的另一份快照 → 必须让位。
+  check('回环命中时不注入（注入条件带 !loopback）',
+    /if\s*\(block && !loopback && shouldInject\(block, state\)\)/.test(src));
+  check('回环跳过注入有日志标记（否则线上看不出让位是否生效）',
+    /SKIP_INJECT=loopback/.test(src));
+}
+
+// ════════════════════════════════════════════════════
+console.log('\n[6] 让位的前提 —— 通知自身内容完整（方案 A 的正确性依据）');
+// ════════════════════════════════════════════════════
+{
+  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
+  const grid = createToneWrapper(
+    createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
+    cfg.contactOverride
+  );
+
+  const stC = { connection: 0.62, pride: 0.15, valence: 0.05, arousal: 0.05 };
+  const notice = buildProactiveNotice(stC, grid, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  check('找她通知形状合规（assertBlockShape 零问题）', assertBlockShape(notice).length === 0, assertBlockShape(notice));
+  check('找她通知自带档位行', /想念：/.test(notice));
+  check('找她通知用 proactive 语域正文', notice.includes(cfg.contactOverride.proactive.forced));
+  check('找她通知不含 reactive 语域正文（让位后才不会打架）',
+    !notice.includes(cfg.contactOverride.reactive.forced));
+  check('找她通知自带出口说明', notice.includes(cfg.proactiveOutlet.contact));
+
+  const stF = { connection: 0.10, pride: 0.20, valence: -0.45, arousal: 0.05 };
+  const fa = buildProactiveNotice(stF, grid, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  check('独处通知形状合规', assertBlockShape(fa).length === 0, assertBlockShape(fa));
+  check('独处通知自带 sceneOverride 正文', fa.includes(cfg.sceneOverride.find_activity.low_valence));
+  check('独处通知自带出口说明', fa.includes(cfg.proactiveOutlet.find_activity));
 }
 
 console.log(`\n${pass}/${total} passed`);

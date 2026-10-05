@@ -172,7 +172,11 @@
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
 | `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
-| `_test/loopback_check.js` | **回环守卫专项**（41 例）：认领命中/一次性/TTL/剥离三版尾句/源码顺序断言 |
+| `_test/loopback_check.js` | **回环守卫专项**（53 例）：认领命中/一次性/TTL/剥离三版尾句/回环让位/通知内容完整性/源码顺序断言 |
+| `_test/dump_loopback_collision.js` | **回环语域冲突对照**：渲染"通知 vs 此刻块"打架的反例（回归参照） |
+| `_test/contract_check.js` | **跨仓库契约（静态）**：读 Serein 源码比对常量 + 穷举 1080 块形状 |
+| `_test/conformance_check.js` | **跨仓库契约（动态）**：用 Serein 真实剥离函数跑桥产的块 |
+| `_test/conformance_strip.py` | 上面那条的 python 侧（被调用，不单独跑） |
 
 ---
 
@@ -406,20 +410,114 @@ if (!loopback && dialog.length >= 2 && CFG.llmKey) {   // 只有真人开口才�
 2. `extractRecentDialog` 内先过 `stripJiwenBlocks()`，把历史里带进来的旧块剔掉
    （三版尾句都认，尾句缺失时按空行兜底）。
 
-### 未做（待定）
+**C · 回环让位（2026-10-06 选定的去重方案）**
 
-回环时**仍然会**注入一次此刻块，所以"同一状态出现两次"这点还在：通知里的块来自
-tick 时刻的快照，桥注入的块来自请求时刻。两者可能跨档（实测有
-`08:04 c:0.35(想念)` → `08:34 c:0.02(悠闲)` 的案例）。去重方案三条：
-① 回环豁免（零重复，快照可能陈旧）；② **分工切割**——通知只留正文+出口说明、
-去掉档位行，桥只补实时档位行；③ 通知瘦身成纯触发信号（丢现场感）。
+回环命中时**不再注入此刻块**。
+
+理由不是"重复"，是**语域打架**：通知是 proactive 语域（"你想开口"），
+此刻块是 reactive 语域（"她在跟你说话"）—— `tone-harlan.json` 里 reactive 列
+明写「她一开口，最后那点耐性自己就用完了」「她终于回话了。隔了这么久…」，
+而回环时她一个字都没说。另叠一层数值冲突：`fireProactive` 投递后**立刻**
+`applyDelta({connection:-0.35})`，于是**通知的档位行是衰减前、此刻块是衰减后**，
+同一条消息里两个 connection 值。
+
+实测对照见 `_test/dump_loopback_collision.js`（三场景渲染）；三个场景的原文差异
+比"文字重复"严重得多 —— 一块说「表达照常…可以顺口调侃一句」，另一块说
+「压不住…别处的动静都接不上了」。
+
+```js
+if (block && !loopback && shouldInject(block, state)) {   // 回环让位
+```
+
+让位的前提是"通知自身内容完整"：`_test/loopback_check.js` 的 [6] 段逐条断言
+通知自带档位行 / proactive 语域正文 / 出口说明，且 `assertBlockShape` 零问题。
+（若哪天通知被瘦身，这段断言会先红。）
+
+日志里多一个 `SKIP_INJECT=loopback` 标记，线上可核对让位是否真的生效。
+
+**未采纳的备选**：让 Operit 只投一个「信封」（如 `【积温·找她】`），桥按
+`loopback.scene` 用请求时刻的状态重渲染完整块。文案与投递彻底解耦，但
+`loopbackGuard` 是**进程内内存**，桥一重启那一轮就认领不到 → 唤醒丢失 +
+`resetConnection`/判定器误开，代价比收益大。
 
 ### 已知残留
 
-积温块是拼进 user 正文的，会被 Serein 存进 `raw_events` 并记成**她的消息**
-（实测 8435 条里 71 条含"积温"，其中 user 43 / assistant 28）。
-影响语义检索与新窗口续接材料。治本方案是让块走独立的 `role:'system'` 消息，
-但需先确认 Serein 网关与上游接受 messages 中段出现 system。
+- 桥重启（`systemctl restart`）会清空进程内的回环记忆，重启后投递的那一轮通知
+  会被当成"她的话"（多一次 `resetConnection` + 喂判定器）。
+- 积温块是拼进 user 正文的，会被 Serein 存进 `raw_events` 并记成**她的消息**
+  （实测 8435 条里 71 条含"积温"，其中 user 43 / assistant 28）。
+  影响语义检索与新窗口续接材料。
+
+**2026-10-06 更新：后一条已由 Serein 侧解决，见下节。**
+原先考虑的"块改走独立 `role:'system'` 消息"方案**不做** —— 查证发现 Serein 自己的
+命中记忆也是拼在 user 消息里的（只有常驻上下文走 system），模型能分清，没必要。
+
+---
+
+## 五之四、与 Serein 的契约（积温块剥离，2026-10-06）
+
+### 契约形态
+
+Serein 侧（fork 提交 `a5c1bdd`）在 `chat_context.py` 里加了三件事：
+
+1. `EXTERNAL_CONTEXT_BLOCK_TITLES` 增加 `积温·此刻` / `积温·找她` / `积温·独处`；
+2. 新增 `EXTERNAL_CONTEXT_BLOCK_END_MARKERS`；
+3. `_strip_external_context_blocks` 在「按行剥出 `【标题】`」之后、进入跳过态之前，
+   先判是不是尾标记。
+
+于是剥离过程变成一个状态机：
+
+```
+见到【积温·X】        → 进跳过态
+跳过态中的任何行      → 丢弃（**空行不算出块信号**）
+见到下一个【】标题行  → 出块
+见到尾标记            → 出块（该行也丢弃）
+```
+
+### ⚠️ 破裂代价不对称 —— 桥侧必须无条件满足
+
+**块头发出、尾标记不匹配 → 跳过态一直持续到消息结尾 → 她的原话被整段吞掉。**
+（Serein 侧用例 8 实测，返回 `''`）
+
+所以桥侧做了三层防护，改这块之前先看清楚：
+
+| 层 | 位置 | 作用 |
+|---|---|---|
+| 单一来源 | `lib/inject-text.js` 的 `BOUNDARY_INNER` | 只写**内文**，括号由代码拼 —— 想写错括号都写不出来 |
+| 形状自断言 | `assertBlockShape(block)` | 查首行、末行、块头唯一性 |
+| 运行时守卫 | `bridge.js` 注入前 + `fireProactive` 发送前 | **不合规就拒绝注入/拒绝发送**，宁可不给状态，也不能让她的话被吞 |
+
+`composeBlock` 无条件把尾标记拼在最后，调用方不需要记得加。
+
+### 形状差异（最容易记混的一点）
+
+```
+桥侧发出     【此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。】
+Serein 存    此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。
+```
+
+Serein 先按行取 `【…】` 里的标题、再拿**内文**比对，所以两边字面量不同形状。
+**改措辞要改 `BOUNDARY_INNER`，然后通知 Serein 侧同步那个字符串。**
+
+### 自动化校验（两个测试，别删）
+
+| 测试 | 性质 | 覆盖 |
+|---|---|---|
+| `_test/contract_check.js` | 静态 | 读 Serein 源码，比对两侧常量字面量；穷举 1080 个块的形状；负向用例 |
+| `_test/conformance_check.js` | 动态 | 用 Serein 的**真实** `_strip_external_context_from_user_text` 跑桥产出的块，比对输出 |
+
+`contract_check` 能发现"改了一侧忘了另一侧"；`conformance_check` 能发现
+"规则我以为是这样、实际不是"。两个都需要 python 与 Serein 源码，
+找不到时**跳过而不是失败**（VPS 上路径是 `/root/Serein/src`）。
+
+### 历史残留（待 Serein 侧补一刀）
+
+`raw_events` 里 `role='user'` 含块头的 31 条：**17 条一版尾、14 条二版尾、零条三/四版**。
+
+一版/二版尾句是**裸行**（没有 `【】`），所以 Serein 取不到 title，
+`EXTERNAL_CONTEXT_BLOCK_END_MARKERS` 加它们**也没用** —— 得在跳过态里额外判一次
+"裸行是否等于尾标记"。风险有限（主要影响 turn 哈希与 `_current_turn_user_index`），
+但一旦命中会把整条消息清空。
 
 ---
 

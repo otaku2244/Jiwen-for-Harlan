@@ -25,7 +25,7 @@ const { URL } = require('url');
 const { createJiwen } = require('./vendor/jiwen.js');
 const { createToneGrid } = require('./vendor/tone-grid.js');
 const { createToneWrapper } = require('./lib/tone-wrap.js');
-const { buildInjectionBlock, buildProactiveNotice, stripJiwenBlocks } = require('./lib/inject-text.js');
+const { buildInjectionBlock, buildProactiveNotice, stripJiwenBlocks, assertBlockShape } = require('./lib/inject-text.js');
 const { createLoopbackGuard } = require('./lib/loopback.js');
 const { analyzeDialog } = require('./lib/analyzer.js');
 const { loadEnvFile } = require('./lib/env.js');
@@ -399,9 +399,30 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     //   判定器读到的就是"这份积温块 + 她的真话"，等于拿自己的输出喂自己。
     const dialog = extractRecentDialog(body, 4);
 
+    // ── 3b. 跨系统契约守卫（与 Serein 的切割线）──
+    //   积温块一旦成型，Serein 见到【积温·X】就进跳过态，**只有末行尾标记能让它出来**。
+    //   末行不对（改了措辞没同步 Serein / 块被截断）→ 紧随其后的她的原话被整段吞掉。
+    //   所以：形状不合规就宁可不注入，也不能发出去。
+    if (block) {
+      const shapeProblems = assertBlockShape(block);
+      if (shapeProblems.length) {
+        log('ERROR', 'block shape invalid, injection skipped: ' + shapeProblems.join(' | '));
+        block = '';
+      }
+    }
+
     // ── 4. 注入（带节流）──
+    //   ⚠️ 回环命中时**必须让位**，不要注入。
+    //
+    //   回环这一轮的 user 消息就是 Operit 原样投递的「主动唤醒通知」，
+    //   那份通知自带：档位行 + proactive 正文 + 出口说明 + 尾句 —— 内容是齐的。
+    //   而此刻块是 **reactive 语域**（tone-harlan.json 的 reactive 列里明写
+    //   「她一开口…」「她终于回话了…」），回环时她一个字都没说；再叠上去
+    //   就是两个相反语域互相打架，且档位行还是**衰减前 / 衰减后**两份快照
+    //   （fireProactive 投递后立刻 applyDelta({connection:-0.35})）。
+    //   实测对照见 `_test/dump_loopback_collision.js`。
     let injected = false;
-    if (block && shouldInject(block, state)) {
+    if (block && !loopback && shouldInject(block, state)) {
       const r = injectIntoBody(body, block);
       body = r.body;
       injected = r.injected;
@@ -411,7 +432,8 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     const loopTag = loopback
       ? ` LOOPBACK=${loopback.scene} age=${Math.round((Date.now() - loopback.at) / 1000)}s`
       : '';
-    log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'}${loopTag} | ${jiwen.getStateSummary()}`);
+    const skipTag = (block && loopback) ? ' SKIP_INJECT=loopback' : '';
+    log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'}${loopTag}${skipTag} | ${jiwen.getStateSummary()}`);
 
     // ── 5. 异步喂判定器（不阻塞转发；仅真人开口才喂）──
     if (!loopback && dialog.length >= 2 && CFG.llmKey) {
@@ -489,6 +511,15 @@ async function fireProactive(notice, state, meta) {
     return;
   }
   if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return; }
+
+  // 同样的跨系统契约：通知最终会经 Operit 落进对话、再回流到 Serein 的归档路径。
+  // 末行不对 → 它后面她的话会被整段吞掉。形状不合规就不发。
+  const shapeProblems = assertBlockShape(notice);
+  if (shapeProblems.length) {
+    log('ERROR', 'proactive notice shape invalid, not sent: ' + shapeProblems.join(' | '));
+    return;
+  }
+
   sendCountToday++;
   log('SEND', 'proactive notice:\n' + notice);
 
