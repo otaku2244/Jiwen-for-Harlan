@@ -429,8 +429,10 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     }
     const outBuf = Buffer.from(JSON.stringify(body), 'utf8');
 
+    // n= 是该通知已被认领的次数：1 = 唤醒轮只有一次请求；
+    // >1 = 这一轮模型调了工具，Operit 复用同一 messages 又发了请求（正常，不是异常）。
     const loopTag = loopback
-      ? ` LOOPBACK=${loopback.scene} age=${Math.round((Date.now() - loopback.at) / 1000)}s`
+      ? ` LOOPBACK=${loopback.scene} age=${Math.round((Date.now() - loopback.at) / 1000)}s n=${loopback.claims}`
       : '';
     const skipTag = (block && loopback) ? ' SKIP_INJECT=loopback' : '';
     log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'}${loopTag}${skipTag} | ${jiwen.getStateSummary()}`);

@@ -172,7 +172,7 @@
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
 | `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
-| `_test/loopback_check.js` | **回环守卫专项**（53 例）：认领命中/一次性/TTL/剥离三版尾句/回环让位/通知内容完整性/源码顺序断言 |
+| `_test/loopback_check.js` | **回环守卫专项**（64 例）：认领命中/可重复认领/TTL/剥离三版尾句/唤醒轮含工具循环/回环让位/通知内容完整性/源码顺序断言 |
 | `_test/dump_loopback_collision.js` | **回环语域冲突对照**：渲染"通知 vs 此刻块"打架的反例（回归参照） |
 | `_test/contract_check.js` | **跨仓库契约（静态）**：读 Serein 源码比对常量 + 穷举 1080 块形状 |
 | `_test/conformance_check.js` | **跨仓库契约（动态）**：用 Serein 真实剥离函数跑桥产的块 |
@@ -392,8 +392,18 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 **A · 回环认领**（`lib/loopback.js`）
 
 桥记住自己发出去的通知原文（`fireProactive` 里 `remember`），请求进来时按原文
-`claim`。归一化去掉全部空白再比对，Operit 加前缀/后缀/压换行都不影响命中。
-`claimed` 保证一条只豁免一次；TTL 2 小时 + 上限 20 条，杜绝陈旧文本被误认。
+`claim`。归一化去掉全部空白再比对，Operit 加前缀 / 后缀 / 压换行都不影响命中。
+TTL 2 小时 + 上限 20 条，杜绝陈旧文本被误认。
+
+⚠️ **同一通知在 TTL 内可被重复认领，不能做成"认领一次就失效"。**
+唤醒轮的 `出口说明` 恰恰在鼓励他调工具，而 Operit 处理工具调用时会用
+**同一个 messages 数组**再发一次请求 —— 此时最后一条 `role:'user'`
+**仍然是那条通知**（工具结果走 `role:'tool'`，不算 user）。一次性认领会让
+第二次请求起全部漏认，① ② ③ 三个 bug 原样复现，回环让位也失效。
+防陈旧由 TTL + "原文必须完整出现"各自守住，一次性是多余的严格。
+
+`claims` 计数只作排查用。日志里 `n=` 就是它 —— `n=1` 说明唤醒轮只有一次请求，
+`n>1` 说明这轮调了工具（正常）。
 
 ```js
 const loopback = loopbackGuard.claim(extractLastUserText(body));
@@ -402,7 +412,7 @@ if (!loopback) await jiwen.resetConnection();          // 只有真人开口才�
 if (!loopback && dialog.length >= 2 && CFG.llmKey) {   // 只有真人开口才喂判定器
 ```
 
-命中时日志里会出现 `LOOPBACK=contact age=63s`，可用于核对真实回环间隔。
+命中时日志里会出现 `LOOPBACK=contact age=63s n=1`，可用于核对真实回环间隔与调用形态。
 
 **B · 判定器只读「注入前」的对话**
 

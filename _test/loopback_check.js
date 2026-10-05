@@ -63,7 +63,14 @@ console.log('\n[1] loopback guard —— 认出回环');
   const g5 = createLoopbackGuard();
   g5.remember({ scene: 'contact', notice: NOTICE });
   check('第一次认领成功', g5.claim(NOTICE) !== null);
-  check('第二次认领为 null（一次性）', g5.claim(NOTICE) === null);
+  // ⚠️ 认领必须可重复：唤醒轮若模型调工具，Operit 会用同一个 messages 再发请求，
+  //    最后一条 user 仍是那条通知。做成一次性 → 第二次起全部漏认，三个 bug 复现。
+  check('第二次认领仍命中（工具轮复用同一 messages）', g5.claim(NOTICE) !== null);
+  check('整轮工具循环都命中（模拟 5 次请求）',
+    [1, 2, 3, 4, 5].every(() => g5.claim(NOTICE) !== null));
+  const rec5 = g5.claim(NOTICE);
+  check('claims 计数递增（排查用）', rec5 && rec5.claims === 8, rec5 && rec5.claims);
+  check('claims 计数记在同一个登记项上（未重复登记）', g5.size() === 1, g5.size());
 
   const g6 = createLoopbackGuard();
   g6.remember({ scene: 'contact', notice: NOTICE });
@@ -101,6 +108,14 @@ console.log('\n[2] loopback guard —— TTL 与容量');
   const g4 = createLoopbackGuard();
   check('空 notice 不登记', g4.remember({ scene: 'contact', notice: '' }) === null);
   check('空 notice 后表为空', g4.size() === 0);
+
+  // 允许重复认领之后，TTL 必须还是硬的 —— 否则"很久以前的通知"会永久豁免。
+  const g5 = createLoopbackGuard({ ttlMs: 2000, now: () => t });
+  g5.remember({ scene: 'contact', notice: NOTICE });
+  check('TTL 窗内第一次命中', g5.claim(NOTICE) !== null);
+  check('TTL 窗内重复命中', g5.claim(NOTICE) !== null);
+  t += 2001;
+  check('超 TTL 后即使已多次认领也失忆', g5.claim(NOTICE) === null);
 
   check('normText 去掉全部空白', normText(' a\n b\tc ') === 'abc');
 }
@@ -214,6 +229,62 @@ console.log('\n[6] 让位的前提 —— 通知自身内容完整（方案 A �
   check('独处通知形状合规', assertBlockShape(fa).length === 0, assertBlockShape(fa));
   check('独处通知自带 sceneOverride 正文', fa.includes(cfg.sceneOverride.find_activity.low_valence));
   check('独处通知自带出口说明', fa.includes(cfg.proactiveOutlet.find_activity));
+}
+
+// ════════════════════════════════════════════════════
+console.log('\n[7] 唤醒轮端到端 —— 含工具循环');
+// ════════════════════════════════════════════════════
+// 复刻 Operit 的真实请求序列。`出口说明` 在鼓励他调工具，所以一轮里往往不止
+// 一次请求：模型调工具后 Operit 复用同一个 messages 再发一次，最后一条
+// `role:'user'` 仍然是那条通知（工具结果走 `role:'tool'`，不算 user）。
+// 三个守卫（不 reset / 不注入 / 不喂判定器）必须在**每一次**请求上都成立。
+{
+  const lastUser = (b) => {
+    for (let i = b.messages.length - 1; i >= 0; i--) {
+      if (b.messages[i].role === 'user') return b.messages[i].content;
+    }
+    return '';
+  };
+  // Operit 侧会把通知压成单行再投（jiwen_pull.js），这里照抄它的形态。
+  const delivered = NOTICE.replace(/\r?\n+/g, ' ').trim();
+
+  const g = createLoopbackGuard();
+  g.remember({ scene: 'contact', notice: NOTICE });
+
+  const bodies = [
+    { tag: '第 1 次：通知投递本身', messages: [{ role: 'user', content: delivered }] },
+    {
+      tag: '第 2 次：模型调工具后重发',
+      messages: [
+        { role: 'user', content: delivered },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1' }] },
+        { role: 'tool', content: '{"ok":true}' },
+      ],
+    },
+    {
+      tag: '第 3 次：还在同一轮里',
+      messages: [
+        { role: 'user', content: delivered },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_2' }] },
+        { role: 'tool', content: '{"ok":true}' },
+      ],
+    },
+  ];
+
+  const hits = bodies.map((b) => ({ tag: b.tag, lb: g.claim(lastUser(b)) }));
+  check('三次请求全部认领为回环（不 reset）',
+    hits.every((h) => h.lb !== null),
+    hits.map((h) => h.tag + '=' + (h.lb ? 'hit' : 'MISS')));
+  check('认领次数记在同一个登记项上（n=3）', g.size() === 1 && g.list()[0].claims === 3,
+    { size: g.size(), claims: g.list()[0] && g.list()[0].claims });
+  check('场景/理由随登记项带出（让位分支要用来渲染）',
+    hits[0].lb.scene === 'contact' && hits[0].lb.reason === null);
+
+  // 对照组：她真的开口 → 必须不命中，三个守卫照常工作。
+  check('唤醒轮结束后她真的开口 → 不命中',
+    g.claim('在忙吗？刚才那条我看到了。') === null);
+  check('她自己打字但引用了通知里的半句 → 不命中',
+    g.claim('「她安静得有点久了」这句是你写的？') === null);
 }
 
 console.log(`\n${pass}/${total} passed`);
