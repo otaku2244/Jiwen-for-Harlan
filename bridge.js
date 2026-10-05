@@ -29,6 +29,7 @@ const { buildInjectionBlock, buildProactiveNotice } = require('./lib/inject-text
 const { analyzeDialog } = require('./lib/analyzer.js');
 const { loadEnvFile } = require('./lib/env.js');
 const { createMcpHandler } = require('./lib/mcp.js');
+const { createClock } = require('./lib/clock.js');
 
 // ── 载入 .env（同目录）────────────────────────────
 loadEnvFile(path.join(__dirname, '.env'));
@@ -56,9 +57,19 @@ const CFG = {
   proactiveMaxPerDay: parseInt(process.env.PROACTIVE_MAX_PER_DAY || '6', 10),
   quietStart: parseInt(process.env.QUIET_START || '0', 10),
   quietEnd: parseInt(process.env.QUIET_END || '8', 10),
+  // 业务时区偏移（小时）。静默时段与日上限都按这个时区判定。
+  // 服务器系统时区是 UTC，若不设此项，QUIET_START=0/QUIET_END=8 会变成
+  // 「UTC 0-8 点静默」＝北京时间 8:00-16:00 静默，恰好把白天当成了夜里。
+  tzOffsetHours: parseInt(process.env.TZ_OFFSET_HOURS || '8', 10),
   mcpEnabled: (process.env.MCP_ENABLED || 'true') !== 'false',
   mcpPath: process.env.MCP_PATH || '/mcp',
 };
+
+// ── 时间（业务时区）──────────────────────────────
+// 日志时间戳一律走 toISOString()（UTC，ISO 8601 标准，排查无歧义）；
+// 只有「静默时段」「日上限跨天」这类业务判断才用业务时区。
+// 换算逻辑在 lib/clock.js，便于单测（可注入任意时间戳）。
+const clock = createClock(CFG.tzOffsetHours);
 
 // ── 日志 ──────────────────────────────────────────
 function ensureDir(p) {
@@ -434,24 +445,23 @@ async function tickOnce() {
   }
 }
 
-// 日上限计数
+// 日上限计数（跨天按业务时区，不是 UTC）
 let sendCountToday = 0;
 let sendDay = '';
 function checkDailyLimit() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = clock.localDateStr();
   if (today !== sendDay) { sendDay = today; sendCountToday = 0; }
   return sendCountToday < CFG.proactiveMaxPerDay;
 }
 function inQuietHours() {
-  const h = new Date().getHours();
-  const { quietStart: s, quietEnd: e } = CFG;
-  if (s === e) return false;
-  if (s < e) return h >= s && h < e;
-  return h >= s || h < e; // 跨午夜
+  return clock.inQuietHours(null, CFG.quietStart, CFG.quietEnd);
 }
 
 async function fireProactive(notice, state, meta) {
-  if (inQuietHours()) { log('INFO', 'proactive blocked by quiet hours'); return; }
+  if (inQuietHours()) {
+    log('INFO', `proactive blocked by quiet hours (local_hour=${clock.localHour()}, quiet=${CFG.quietStart}-${CFG.quietEnd})`);
+    return;
+  }
   if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return; }
   sendCountToday++;
   log('SEND', 'proactive notice:\n' + notice);
@@ -506,6 +516,8 @@ const mcp = CFG.mcpEnabled ? createMcpHandler({
     proactive_enabled: CFG.proactiveEnabled,
     in_quiet_hours: inQuietHours(),
     quiet_range: [CFG.quietStart, CFG.quietEnd],
+    local_hour: clock.localHour(),
+    tz_offset_hours: CFG.tzOffsetHours,
     sent_today: sendCountToday,
     daily_limit: CFG.proactiveMaxPerDay,
     inject_enabled: CFG.injectEnabled,

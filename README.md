@@ -127,6 +127,7 @@
 | `lib/tone-wrap.js` | **语调网格包装层**。修 pride/connection 脱节 |
 | `lib/mcp.js` | **MCP 服务**（Streamable HTTP / JSON-RPC）。给 Operit 定时拉通知 |
 | `lib/analyzer.js` | 判定器。调 deepseek-flash 出 delta |
+| `lib/clock.js` | **业务时区时钟**。静默时段 / 日上限跨天按 `TZ_OFFSET_HOURS` 算，不依赖系统 TZ |
 | `lib/env.js` | 极简 .env 解析 |
 | `config/tone-harlan.json` | **Harlan 语调网格**（9 簇 × 5 档 pride + contactOverride + sceneOverride）。核心人格皮肤 |
 | `config/persona-scope.md` | **分工边界**：世界书 / 积温 / 模型 三者职责划分 |
@@ -149,6 +150,7 @@
 | `_test/anger_check.js` | **真生气 vs 敷衍判别专项**（5 例） |
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
 | `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
+| `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
 
 ---
 
@@ -167,6 +169,7 @@
 
 - **默认参数（当前 `.env.example`）日均 2 次**，节奏合适，不用改。
 - 首发在**凌晨 2 点**是因为静默时段只拦投递、不拦累积，熬过一夜概率必然顶格。**要抑制就调 `QUIET_START`/`QUIET_END`，或在桥里加"静默期不累积"**（当前未实现，因为积温上游不支持）。
+- 上表"首发时刻"按**业务时区**计（`param_scan.js` 的模拟起点是 `2026-10-05T00:00:00+08:00`）。运行时实际的静默判定见七之五。
 - `r=0.00025` 这类"更缓"参数会让**一天一次都不发**——因为 8 小时只涨到 0.11，够不到 0.35 的线。这是**特性不是 bug**。
 
 ⚠️ **参数陷阱**：`CONNECTION_ACCEL` 必须 **> 1** 才叫加速；设成 0.8 反而被 `pow(1+c, 0.8)` 压慢。设 0 是纯线性。
@@ -399,6 +402,53 @@ const changed = sig !== lastInjectSig;
 **验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 15/15；VPS 实测连续三轮 `inject=true`（档位词全程未变）。
 
 **遗留观察点**：`connection` 每轮被 `resetConnection()` 清零，导致「想念」轴在频繁聊天时永远涨不起来（需靠 tick 的时间累积，`CONNECTION_RATE=0.0007/min` ≈ 24 小时涨满）。真实节奏下是否合适，待长时间观察。
+
+---
+
+## 七之五、业务时区（重要，2026-10-05 修）
+
+**问题现象**：静默时段与北京时间差 8 小时。北京时间中午 12:00 被判定为静默，通知发不出来。
+
+**根因**：`inQuietHours()` 用的是 `new Date().getHours()`，而 VPS 系统时区是 `Etc/UTC`，该方法返回的是 **UTC 小时**。
+
+```
+QUIET_START=0 / QUIET_END=8  的意图：凌晨 0 点到早 8 点别打扰
+实际执行：UTC 0-8 点静默  ＝  北京时间 8:00-16:00 静默
+```
+
+**恰好把白天当成了夜里** —— 她在上班时段收不到通知，在她睡觉的时段（北京 0-8 点）反而活跃。
+
+同一处的时区错误还牵连 **日上限跨天**：`checkDailyLimit()` 用 `toISOString().slice(0,10)` 取日期，等于按 **UTC 0 点 = 北京 8 点** 重置配额，与"自然日"不符。
+
+**修法**：新增 `lib/clock.js`，所有业务时间判断走显式时区偏移。
+
+```js
+// bridge.js
+const clock = createClock(CFG.tzOffsetHours);          // lib/clock.js
+const today = clock.localDateStr();                     // 日上限跨天
+const inQuiet = clock.inQuietHours(null, quietStart, quietEnd);  // 静默判定
+```
+
+实现全程基于 `getUTC*` + 固定偏移，**不依赖系统 TZ**，因此在任何时区的机器上结果一致。
+
+**语义约定（重要）**：
+
+| 用途 | 时区 | 理由 |
+|---|---|---|
+| 日志时间戳 | **UTC**（`toISOString()`） | ISO 8601 标准，跨机器排查无歧义 |
+| 静默时段 / 日上限跨天 | **业务时区**（`TZ_OFFSET_HOURS`） | 面向"人的作息"，必须随人所在时区 |
+
+这是「技术时间」与「业务时间」分离，不是不一致。
+
+**配置**：`.env` 加 `TZ_OFFSET_HOURS=8`（北京）。`0` 即 UTC。仅支持整小时偏移。
+
+**排查辅助**：`get_status` 返回 `local_hour` 与 `tz_offset_hours`；静默拦截日志会带上实际判定值：
+
+```
+proactive blocked by quiet hours (local_hour=4, quiet=0-8)
+```
+
+**验证**：`_test/quiet_hours_check.js` 25/25，含跨午夜、边界（左闭右开）、`start === end`、以及"改系统 TZ 结果不变"的断言。
 
 ---
 
