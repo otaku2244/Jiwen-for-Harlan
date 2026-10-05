@@ -170,9 +170,10 @@
 | `_test/simulate_loop.js` | **闭环模拟**：真判定器 + 7 天语料 → CSV |
 | `_test/anger_check.js` | **真生气 vs 敷衍判别专项**（5 例） |
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
-| `_test/mcp_check.js` | **MCP 协议专项**（31 例） |
+| `_test/mcp_check.js` | **MCP 协议专项**（57 例）：握手/SSE/鉴权 + 队列取最新策略 |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
 | `_test/loopback_check.js` | **回环守卫专项**（64 例）：认领命中/可重复认领/TTL/剥离三版尾句/唤醒轮含工具循环/回环让位/通知内容完整性/源码顺序断言 |
+| `_test/probe_supersede.js` | **通知顺序探针**：真引擎 7 天逐 tick，证伪"contact 被更晚的 find_activity 顶掉"，并量出投递滞后与静默期照扣衰减 |
 | `_test/dump_loopback_collision.js` | **回环语域冲突对照**：渲染"通知 vs 此刻块"打架的反例（回归参照） |
 | `_test/contract_check.js` | **跨仓库契约（静态）**：读 Serein 源码比对常量 + 穷举 1080 块形状 |
 | `_test/conformance_check.js` | **跨仓库契约（动态）**：用 Serein 真实剥离函数跑桥产的块 |
@@ -353,9 +354,47 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 | 项 | 值 |
 |---|---|
 | 取走即清空 | 同一条通知只返回一次（`peek: true` 可只查不取） |
+| **多条时给哪条** | **给最新那条**（`list[list.length-1]`）。更早的进 `additional`（按新→旧排），仅供排查、不投递 |
 | 上限 | 20 条，超出丢最旧（防 Operit 长期不来导致堆积） |
 | 存储 | 进程内存（桥常驻单实例，够用） |
 | 筛选 | 入队前已过**静默时段**与**日上限**闸门 |
+
+#### 为什么是"最新"而不是"最旧"（2026-10-06 实测）
+
+`_test/probe_supersede.js` 拿真引擎 + 桥的真实参数跑了 7 天逐 tick，两组 poll 间隔对照
+（30 分钟 / 8 小时），结论：
+
+| 问题 | 实测 |
+|---|---|
+| `contact` 会不会被更晚的 `find_activity` 顶掉？ | **0 次。** 两个闸门前提在时间上互斥 |
+| 队列最长几条？ | **5** |
+| 这 5 条是什么场景？ | **全是同一场景** |
+
+互斥的原因（数字来自同一支脚本）：
+
+| 闸门 | 需要 | 时间尺度 |
+|---|---|---|
+| `contact` | `c ≥ 0.35` | `resetConnection` 归零后爬 **399 分钟 ≈ 6.7 h** |
+| 自我调节 → `find_activity` | `arousal ≥ 0.70` | 0.7 回归到 0 只要 **140 分钟 ≈ 2.3 h** |
+| 开口 → `find_activity(pride_block)` | `c ≥ 0.35` **且** `p ≥ 0.50` | `prideRegress=0.003/min` → 6.7 h 内 p 必归 0，**不可达** |
+
+铁证：**`contact` 触发那一刻的 `arousal` 恒为 `0.00`**（2016 个 tick 无一例外）。
+另外 `valenceActivity` 的 vendor 默认阈值就是 `-1.0`（注释明写"=-1.0 即永不"），
+而 valence 轴下限也是 -1 —— 那条路本身是死的。
+
+所以真正成立的理由只有一条：**同场景多条时文案完全相同、只差一个更旧的档位行**，
+留最旧、丢最新 = 白扔掉更新的那份。取最新不需要任何额外机制，也不需要场景优先级。
+
+**同一支脚本还量出两件事**（都是实测，不是推测）：
+
+- **投递滞后均值 17.5 分钟**（最大 20 分钟 = poll 间隔）。拆开看：`contact` 7/7 都在
+  她还沉默时投出（正确）；`find_activity` 7/7 都在她已经开口之后才投出 —— 这是
+  "她那句话让他不好受 → 他自己去消化"的自然结果，不是缺陷。
+- ⚠️ **静默时段的 `contact` 触发照样扣 `-0.35`**：`bridge.js` 里 `await fireProactive(...)`
+  之后**无条件** `applyDelta({connection:-0.35})`，而 `fireProactive` 在静默/超日限时
+  是 `return` 早退、通知根本没投出去。7 天里 14 次 contact 有 7 次落在静默时段。
+  效果上把早晨那次唤醒从 ~03:10 推到 ~09:50 —— 结果可能是想要的，但是**顺带**达成的。
+  **当前未改。**
 
 ### Operit 侧怎么接
 
@@ -804,6 +843,6 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | MCP 工具的描述或返回值 | `lib/mcp.js` 的 `buildToolDefs` / `callTool` |
 | 换判定器模型 | `.env` 的 `LLM_BASE` / `LLM_KEY` / `LLM_MODEL` / `LLM_DISABLE_THINKING` |
 | 看判定器实际表现 | `node _test/simulate_loop.js`（闭环）或 `analyze_check.js`（单例） |
-| 验 MCP 协议是否正常 | `node _test/mcp_check.js`（31 例，不起真桥） |
+| 验 MCP 协议是否正常 | `node _test/mcp_check.js`（57 例，不起真桥） |
 
 **校准方法**：跑两天，翻 `bridge.log`，找那些"这句语气不对"的地方，看当时 `[TICK]` 行的五轴值落在哪一档，改对应的格子。改完跑 `node _test/build_prompt_html.js` 重新生成清单对照。

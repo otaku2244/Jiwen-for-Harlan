@@ -114,7 +114,20 @@ async function call(payload, opts) {
     check('④ count=2 且含 additional', parsed.count === 2 && Array.isArray(parsed.additional), parsed);
     check('④ notice 原文完整（含边界句）', typeof parsed.notice === 'string' &&
       parsed.notice.includes('以上是内在心绪和潜意识的自然流露'), parsed.notice);
-    check('④ scene 透传', parsed.scene === 'contact', parsed.scene);
+    // ⚠️ 多条时必须给**最新**那条（证据见 _test/probe_supersede.js）：
+    //    队列里两种场景不会同时出现（两个闸门前提在时间上互斥），但同场景会攒到 5 条，
+    //    那时留最旧、丢最新 = 白扔掉更新的档位行。
+    check('④ 多条时 scene 取最新那条（find_activity，不是先入队的 contact）',
+      parsed.scene === 'find_activity', parsed.scene);
+    check('④ reason / at / notice 三者同源，都属于被选中那条',
+      parsed.reason === 'pride_block'
+      && parsed.at === '2026-10-05T00:05:00.000Z'
+      && parsed.notice.includes('【积温·独处】'),
+      { reason: parsed.reason, at: parsed.at, head: String(parsed.notice).slice(0, 12) });
+    check('④ additional 里剩下的是更早那条（contact）',
+      parsed.additional.length === 1 && parsed.additional[0].scene === 'contact',
+      parsed.additional.map((x) => x.scene));
+    check('④ note 说明了"只留最新"', /只留最新/.test(parsed.note || ''), parsed.note);
 
     const { json: j2 } = await call({ jsonrpc: '2.0', id: 5, method: 'tools/call',
       params: { name: 'get_pending_notice', arguments: {} } });
@@ -201,6 +214,28 @@ async function call(payload, opts) {
     const all = mcp.takeNotices();
     check('⑭ 保留的是最新的', all[0].notice === 'N5' && all[19].notice === 'N24',
       { first: all[0].notice, last: all[19].notice });
+  }
+
+  // ㉒ 同场景攒到多条 → 投最新那条（这才是"取最新"的真实理由）
+  //
+  // probe_supersede.js 实测：队列最长到 5 条，且**全是同一场景**（一次情绪对话后
+  // find_activity 每 5 分钟触发一次）。同场景文案相同、只差档位行 → 留最旧丢最新
+  // 等于白扔更新的那份。所以必须投 newest。
+  {
+    for (let i = 0; i < 5; i++) {
+      mcp.pushNotice({ scene: 'find_activity', reason: 'low_valence', at: 'T' + i,
+        notice: 'N' + i, stateSummary: null });
+    }
+    check('㉒ 入队 5 条', mcp.pendingCount() === 5, mcp.pendingCount());
+    const { json } = await call({ jsonrpc: '2.0', id: 30, method: 'tools/call',
+      params: { name: 'get_pending_notice', arguments: {} } });
+    const p = JSON.parse(json.result.content[0].text);
+    check('㉒ count=5', p.count === 5, p.count);
+    check('㉒ 投出去的是最新那条（N4）', p.notice === 'N4' && p.at === 'T4', { notice: p.notice, at: p.at });
+    check('㉒ additional 是其余 4 条、按新→旧排',
+      p.additional.length === 4 && p.additional[0].notice === 'N3' && p.additional[3].notice === 'N0',
+      p.additional.map((x) => x.notice));
+    check('㉒ note 点明丢了 4 条', /另有 4 条更早的未投递/.test(p.note || ''), p.note);
   }
 
   // ══════ Streamable HTTP 兼容性（对齐官方 kotlin-sdk 客户端）══════
