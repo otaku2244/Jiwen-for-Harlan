@@ -144,6 +144,7 @@ function scheduleFlush() {
 // ── 语调网格 ──────────────────────────────────────
 let toneGrid = null;
 let SCENE_OVERRIDE = {};
+let PROACTIVE_OUTLET = {};
 try {
   const tonePath = path.join(__dirname, 'config', 'tone-harlan.json');
   const toneCfg = JSON.parse(fs.readFileSync(tonePath, 'utf8'));
@@ -155,6 +156,7 @@ try {
     toneCfg.contactOverride
   );
   SCENE_OVERRIDE = toneCfg.sceneOverride || {};
+  PROACTIVE_OUTLET = toneCfg.proactiveOutlet || {};
   log('INFO', 'tone grid loaded: tone-harlan.json (with contact-override wrapper)');
 } catch (e) {
   log('ERROR', 'tone grid load failed, falling back to defaults: ' + e.message);
@@ -424,19 +426,19 @@ async function tickOnce() {
     if (!CFG.proactiveEnabled) return;
     for (const t of actionable) {
       if (t.action === 'contact') {
-        const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE);
+        const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
         await fireProactive(notice, st, { scene: 'contact' });
         // 开口 ≠ 被回复：部分缓解
         await jiwen.applyDelta({ connection: -0.35 });
       } else if (t.action === 'find_activity') {
         // 桥不碰"活动"本身：不发英文活动枚举、不调 setActivity。
-        // 只投一条自留地通知，具体做什么由 Operit 侧工作流与模型自理。
+        // 只投一条独处通知，具体做什么由 Operit 侧工作流与模型自理。
         //
         // 场景统一为 find_activity，reason（pride_block / low_valence / high_arousal）
         // 只作排查线索，不再分叉成独立 scene。
         // 理由：引擎侧这三个 reason 的 action 都是 'find_activity'，
-        // 语义上都是"回头去找点事做"，投递目标（自留地窗口）本就该一致。
-        const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE);
+        // 语义上都是"回头去找点事做"，投递目标（独处窗口）本就该一致。
+        const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
         await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
       }
     }

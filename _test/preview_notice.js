@@ -22,27 +22,27 @@ const CASES = [
   },
   {
     name: '② 找她（contact）· 过了考虑线',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride),
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet),
     st: { connection: 0.42, pride: 0.4, valence: 0.1, arousal: -0.2, immersion: 0.1 },
   },
   {
     name: '③ 找她（contact）· 过了强制线',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride),
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet),
     st: { connection: 0.62, pride: 0.2, valence: 0.3, arousal: 0.4, immersion: 0.1 },
   },
   {
-    name: '④ 自留地（find_activity / pride_block）',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride),
+    name: '④ 独处（find_activity / pride_block）',
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet),
     st: { connection: 0.40, pride: 0.7, valence: -0.1, arousal: -0.3, immersion: 0.1 },
   },
   {
-    name: '⑤ 自留地（find_activity / low_valence）',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride),
+    name: '⑤ 独处（find_activity / low_valence）',
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet),
     st: { connection: 0.10, pride: 0.2, valence: -0.8, arousal: -0.3, immersion: 0.1 },
   },
   {
-    name: '⑥ 自留地（find_activity / high_arousal）',
-    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride),
+    name: '⑥ 独处（find_activity / high_arousal）',
+    fn: (st) => buildProactiveNotice(st, tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride, cfg.proactiveOutlet),
     st: { connection: 0.10, pride: 0.4, valence: -0.2, arousal: 0.8, immersion: 0.1 },
   },
 ];

@@ -24,7 +24,7 @@
 ```
 内置定时器 tick → 越阈 → 按场景拼通知块
   ├─ contact（找她）        ← connection 过线，挂 urgencyBoost 尾注
-  └─ find_activity（自留地） ← pride 挡住开口 / 心情过低 / arousal 过高
+  └─ find_activity（独处） ← pride 挡住开口 / 心情过低 / arousal 过高
        reason: pride_block / low_valence / high_arousal
   → 投递到 Operit 工作流（proactiveWebhook，作为一条 user 消息注入）
 ```
@@ -76,25 +76,41 @@
 以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。   ← 统一边界句
 ```
 
-> 头尾措辞 2026-10-05 修订：旧头 `【积温·{场景}｜参考不是指令】` → 新头 `【积温·{场景}】`；
-> 旧尾 `以上是系统通知，非用户消息，不用提及相关内容。` → 新尾如上。
+> 头尾沿革：旧头 `【积温·{场景}｜参考不是指令】` / 旧尾 `以上是系统通知，非用户消息，不用提及相关内容。`
+> → 二版头 `【积温·{场景}】` / 二版尾 `以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。`
+> → 三版尾 `此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。`（现行）
 > 去掉了"参考不是指令""系统通知""非用户消息"这类工单味元话语。
 > ⚠️ 尾句刻意**不写**"以下是她的消息"：用户消息后面可能紧跟文件传输的文本/地址，
-> 写"以下是她的消息"会把文件信息误纳入"她的话"语义。边界只声明"这是内在心绪，别复述"。
+> 写"以下是她的消息"会把文件信息误纳入"她的话"语义。
+> ⚠️ 三版与二版的关键差别在**禁止对象**：二版禁"复述此状态"（按字面会把"我心情不错"这种
+> 合法的状态自述一起误伤），三版禁"元说明"（对系统/设定的说明）。**模型说"我现在心情不错"
+> 是正向反馈，不是要防的东西**；要防的是脚手架暴露——"系统又告诉我…""根据我的设定…"。
+> 也不要在提示词里列举反例，那等于把那些词直接摆到模型眼前。
 > 中间的档位行与行为指令**保持原样不动**——模型念不念、混不混由头尾边界句决定，与档位行文体无关。
 
-| 场景标签 | 触发 | 正文来源 |
-|---|---|---|
-| `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance` |
-| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） |
-| `自留地` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` |
+| 场景标签 | 触发 | 正文来源 | 出口说明 |
+|---|---|---|---|
+| `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance` | 无（他已在回话） |
+| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） | `proactiveOutlet.contact` |
+| `独处` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` | `proactiveOutlet.find_activity` |
 
-> `自留地` 的 reason 有三个键：`pride_block` / `low_valence` / `high_arousal`。
+> `独处` 的 reason 有三个键：`pride_block` / `low_valence` / `high_arousal`。
 > 由积温引擎按触发原因填，桥只透传，不再把 `high_arousal` 拆成独立场景。
 
-**为什么自留地要独立尾注**：`urgencyBoost` 的 proactive 列语义是"想她了要发点什么"
-（"她安静得有点久了…"），而自留地的语义是"她不在，这是我的时间"。若共用，自留地会挂上联系她的尾注，
+**为什么独处要独立尾注**：`urgencyBoost` 的 proactive 列语义是"想她了要发点什么"
+（"她安静得有点久了…"），而独处的语义是"她不在，这是我的时间"。若共用，独处会挂上联系她的尾注，
 气质完全是反的。
+
+**出口说明（`proactiveOutlet`）**：主动唤醒的两个场景各追加一句，插在正文之后、边界句之前。
+职责只有一个 —— 告诉他**这件事可以怎么做**：发文字消息 / 用工具做点什么 / 自言自语。
+不加在「此刻块」上（那时他已经在回话了）。
+
+- 不要在这里写「简短」「自然」这类**长度要求**：`找她` 场景在 `c<0.35` 或 `pride≥0.50` 时
+  正文就是 45 格，45 格可能正说"表达比平时满"，再要求"简短"会直接打架。量级与长度全部交回 45 格。
+- 不要在文案里点名客户端（Operit / OMate）或提「通知」二字 —— 那是把脚手架写进注入块，
+  正是边界句所禁的「元说明」，写了反而给模型 priming。
+- `找她` 场景必须写成"用工具做点什么**再给她**"：调工具是手段，"给她一个东西"才是目的。
+  Operit 里工具调用的产出默认是给 agent 自己看的，不写"再给她"会出现"调了工具但没发出去"。
 
 ---
 
@@ -606,7 +622,7 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 |---|---|
 | Harlan 的语气（每档 pride 怎么说话） | `config/tone-harlan.json` 的 `profiles` |
 | 越线时的开口动机文案 | `config/tone-harlan.json` 的 `contactOverride` |
-| 自留地场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
+| 独处场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
 | 注入块里显示什么 | `lib/inject-text.js` |

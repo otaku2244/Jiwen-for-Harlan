@@ -119,7 +119,7 @@ async function step(minutes, note) {
   console.log('\n════════ 场景四：主动唤醒通知原文 ════════');
   await jiwen.applyDelta({ connection: 0.55, pride: 0.4 });
   const sp = await jiwen.getState();
-  console.log(buildProactiveNotice(sp, toneGrid));
+  console.log(buildProactiveNotice(sp, toneGrid, { scene: 'contact' }, toneCfg.sceneOverride, toneCfg.proactiveOutlet));
 
   // 落盘
   const out = path.join(__dirname, '.run', 'sim-day.json');
