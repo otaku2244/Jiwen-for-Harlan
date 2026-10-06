@@ -714,7 +714,8 @@ const mcp = CFG.mcpEnabled ? createMcpHandler({
 
   server.listen(CFG.port, CFG.host, () => {
     log('INFO', `bridge listening on ${CFG.host}:${CFG.port} → ${CFG.upstreamBase}`);
-    log('INFO', `inject=${CFG.injectEnabled} proactive=${CFG.proactiveEnabled} tick=${CFG.tickMinutes}min`);
+    log('INFO', `inject=${CFG.injectEnabled} proactive=${CFG.proactiveEnabled} tick=${CFG.tickMinutes}min` +
+      ` surf=${CFG.surfEnabled ? CFG.surfDir : 'off'}`);
     if (mcp) log('INFO', `MCP endpoint: http://${CFG.host}:${CFG.port}${CFG.mcpPath} (Streamable HTTP, 3 tools)`);
   });
   // SSE 长连接需要无限期保持；HTTP 层其余超时对短请求无意义。
