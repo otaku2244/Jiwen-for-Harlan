@@ -20,6 +20,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { URL } = require('url');
 
 const { createJiwen } = require('./vendor/jiwen.js');
@@ -64,6 +65,15 @@ const CFG = {
   tzOffsetHours: parseInt(process.env.TZ_OFFSET_HOURS || '8', 10),
   mcpEnabled: (process.env.MCP_ENABLED || 'true') !== 'false',
   mcpPath: process.env.MCP_PATH || '/mcp',
+
+  // ── 自由冲浪（surf）──────────────────────────────────────────────
+  // find_activity 越阈 → 先查静默时段/日上限 → 再 spawn 一次 surf。
+  // 闸门必须在 spawn **之前**：先跑再判等于白烧一次模型钱，且"没开口也算了缓解"。
+  surfEnabled: (process.env.SURF_ENABLED || 'false') === 'true',
+  surfDir: process.env.SURF_DIR || '/root/proactive-web-surf-agent/v2',
+  surfEntry: process.env.SURF_ENTRY || 'dist/index.js',
+  surfTimeoutMs: parseInt(process.env.SURF_TIMEOUT_MS || '180000', 10),
+  surfFindingPath: process.env.SURF_FINDING_PATH || '/surf/finding',
 };
 
 // ── 时间（业务时区）──────────────────────────────
@@ -341,6 +351,46 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
   req.on('end', async () => {
     let bodyBuf = Buffer.concat(chunks);
 
+    // ── 自由冲浪产物回投（surf → 桥 → 自留地）──
+    // surf 不自己投递：回环认领表、静默时段、日上限都只在桥进程里，
+    // 绕过桥直接写自留地会同时踩这三个坑。
+    if (u.pathname === CFG.surfFindingPath) {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'method not allowed' } }));
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(bodyBuf.toString('utf8') || '{}');
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'bad json' } }));
+        return;
+      }
+      try {
+        const ok = payload.ok !== false;
+        const failure = ok ? null
+          : ('刚才想去翻点东西，没翻成（' + String(payload.error || '原因不明').slice(0, 120) + '）。');
+        const finding = ok ? {
+          title: payload.title, url: payload.url, image: payload.image, note: payload.note,
+        } : null;
+        const st = await jiwen.getState();
+        const notice = buildProactiveNotice(st, toneGrid, {
+          scene: 'find_activity', reason: 'surf', finding, failure,
+        }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
+        await fireProactive(notice, st, { scene: 'find_activity', reason: 'surf' });
+        log('INFO', 'surf finding received' + (ok ? '' : ' (failure branch)'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'accepted' }));
+      } catch (e) {
+        log('ERROR', 'surf finding failed: ' + e.message);
+        if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: e.message } }));
+      }
+      return;
+    }
+
     // ── MCP 端点（Streamable HTTP）──
     // 与聊天转发互不干扰：只认这一个路径，其余原样走代理逻辑。
     if (mcp && u.pathname === CFG.mcpPath) {
@@ -486,6 +536,22 @@ async function tickOnce() {
         // 只作排查线索，不再分叉成独立 scene。
         // 理由：引擎侧这三个 reason 的 action 都是 'find_activity'，
         // 语义上都是"回头去找点事做"，投递目标（独处窗口）本就该一致。
+        //
+        // ── 有 surf 能力时改走"伸触手"路径 ──
+        // 闸门必须在 spawn **之前**：先跑再判等于白烧一次模型钱。
+        // 跑完的结果由 surf 回投 /surf/finding，那条路径再拼块 + fireProactive。
+        if (CFG.surfEnabled) {
+          if (inQuietHours()) {
+            log('INFO', `surf blocked by quiet hours (local_hour=${clock.localHour()}, quiet=${CFG.quietStart}-${CFG.quietEnd})`);
+            continue;
+          }
+          if (!checkDailyLimit()) {
+            log('INFO', 'surf blocked by daily limit');
+            continue;
+          }
+          spawnSurf(t.reason);
+          continue;
+        }
         const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
         await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
       }
@@ -505,6 +571,53 @@ function checkDailyLimit() {
 }
 function inQuietHours() {
   return clock.inQuietHours(null, CFG.quietStart, CFG.quietEnd);
+}
+
+// ── 自由冲浪：spawn surf 进程一次 ────────────────────────
+// 闸门（静默时段 / 日上限）由调用方在 spawn **之前**判过，这里不重复判。
+// 结果不在这里处理：surf 跑完会 POST 回 /surf/finding，那条路径负责拼块与投递。
+// surf 自己也失败时（进程崩、超时）什么都不回 —— 由这里打印兜底日志。
+let surfInFlight = false;
+function spawnSurf(reason) {
+  if (surfInFlight) { log('INFO', 'surf already in flight, skip'); return; }
+  const entry = path.join(CFG.surfDir, CFG.surfEntry);
+  if (!fs.existsSync(entry)) {
+    log('ERROR', `surf entry not found: ${entry} (SURF_DIR/SURF_ENTRY 配错?)`);
+    return;
+  }
+  surfInFlight = true;
+  log('INFO', `surf spawning (reason=${reason || 'unknown'}, entry=${entry})`);
+  const child = spawn(process.execPath, [entry, '--once'], {
+    cwd: CFG.surfDir,
+    // 关键：surf 必须走 jiwen 通道回投，且不能自主排期（那是 --once 保证的）。
+    env: {
+      ...process.env,
+      AUTO_SCHEDULE: 'false',
+      DELIVERY_CHANNEL: 'jiwen',
+      JIWEN_BASE_URL: `http://127.0.0.1:${CFG.port}`,
+      JIWEN_TOKEN: CFG.token,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  const cap = (buf) => { out += buf.toString('utf8'); if (out.length > 8000) out = out.slice(-8000); };
+  child.stdout.on('data', cap);
+  child.stderr.on('data', cap);
+  const timer = setTimeout(() => {
+    log('ERROR', `surf timeout after ${CFG.surfTimeoutMs}ms, killing pid ${child.pid}`);
+    try { child.kill('SIGKILL'); } catch (_) { /* 已退出 */ }
+  }, CFG.surfTimeoutMs);
+  child.on('error', (e) => {
+    clearTimeout(timer);
+    surfInFlight = false;
+    log('ERROR', 'surf spawn failed: ' + e.message);
+  });
+  child.on('close', (code, signal) => {
+    clearTimeout(timer);
+    surfInFlight = false;
+    log('INFO', `surf exited (code=${code}, signal=${signal || 'none'})`);
+    if (out.trim()) log('INFO', 'surf output:\n' + out.trim());
+  });
 }
 
 async function fireProactive(notice, state, meta) {
