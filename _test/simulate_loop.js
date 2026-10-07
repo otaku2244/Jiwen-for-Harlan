@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const { createJiwen } = require('../vendor/jiwen.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
+const { createDescriber } = require('../lib/describe.js');
 const { loadEnvFile } = require('../lib/env.js');
 
 loadEnvFile(path.join(__dirname, '..', '.env'));
@@ -47,10 +47,12 @@ const cfg = {
 
 // ── 语调网格 ──
 const toneCfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const toneGrid = createToneWrapper(
-  createToneGrid({ profiles: toneCfg.profiles, urgencyBoost: toneCfg.urgencyBoost }),
-  toneCfg.contactOverride
-);
+const toneGrid = createToneGrid({ profiles: toneCfg.profiles, urgencyBoost: toneCfg.urgencyBoost });
+const desc = createDescriber(toneCfg.describe);
+
+// 描述层是 buildXxx 新增的末位参数 —— 包一层，免得每个调用点手写。
+const bN = (st, g, opts, so, po) => buildProactiveNotice(st, g, opts, so, po, desc);
+const bI = (st, g) => buildInjectionBlock(st, g, desc);
 
 // ── 虚拟时钟 ──
 let VNOW = new Date('2026-10-05T08:00:00+08:00').getTime();

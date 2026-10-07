@@ -15,13 +15,15 @@ const {
   assertBlockShape, SCENE_TAG, SURF_TAIL_LINE, BOUNDARY_LINE,
 } = require('../lib/inject-text.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
+const { createDescriber } = require('../lib/describe.js');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const tg = createToneWrapper(
-  createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-  cfg.contactOverride
-);
+const tg = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
+const desc = createDescriber(cfg.describe);
+
+// 描述层是 buildXxx 新增的末位参数 —— 包一层，免得每个调用点手写。
+const bN = (st, g, opts, so, po) => buildProactiveNotice(st, g, opts, so, po, desc);
+const bI = (st, g) => buildInjectionBlock(st, g, desc);
 
 const out = [];
 const w = (s) => out.push(s === undefined ? '' : s);
@@ -39,15 +41,15 @@ const REAL_FINDING = {
 
 // ── 用例表 ─────────────────────────────────────────────
 const CASES = [
-  ['此刻块（reactive，每次聊天）', () => buildInjectionBlock(S({ pride: 0.2, valence: 0.35 }), tg)],
-  ['找她 · c=0.30（未过线，无开口动机）', () => buildProactiveNotice(S({ connection: 0.30, pride: 0.1 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['找她 · c=0.42 p=0.15（开口动机 normal）', () => buildProactiveNotice(S({ connection: 0.42, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['找她 · c=0.62（forced）', () => buildProactiveNotice(S({ connection: 0.62, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · pride_block（无产物）', () => buildProactiveNotice(S({ connection: 0.40, pride: 0.60 }), tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · low_valence（无产物）', () => buildProactiveNotice(S({ valence: -0.55, arousal: 0.1 }), tg, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · high_arousal（无产物）', () => buildProactiveNotice(S({ arousal: 0.65 }), tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · surf 有产物（昨天线上那条）', () => buildProactiveNotice(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · surf 失败兜底', () => buildProactiveNotice(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['此刻块（reactive，每次聊天）', () => bI(S({ pride: 0.2, valence: 0.35 }), tg)],
+  ['找她 · c=0.30（未过线）', () => bN(S({ connection: 0.30, pride: 0.1 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['找她 · c=0.42 p=0.15（过线，pride 不高）', () => bN(S({ connection: 0.42, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['找她 · c=0.62（强制线以上）', () => bN(S({ connection: 0.62, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · pride_block（无产物）', () => bN(S({ connection: 0.40, pride: 0.60 }), tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · low_valence（无产物）', () => bN(S({ valence: -0.55, arousal: 0.1 }), tg, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · high_arousal（无产物）', () => bN(S({ arousal: 0.65 }), tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · surf 有产物（昨天线上那条）', () => bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · surf 失败兜底', () => bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet)],
 ];
 
 // 模拟手机侧搬运脚本的压平（jiwen_pull.js: notice.replace(/\r?\n+/g,' ')）
@@ -66,7 +68,7 @@ function renderAll() {
 w('# 块头统一 + 主动唤醒三条路径复核');
 w('');
 w('> 全部由 `_test/probe_block_heads.js` 用生产配置（`config/tone-harlan.json`）');
-w('> 与生产函数（`lib/inject-text.js` / `lib/tone-wrap.js`）实时渲染，文案零手抄。');
+w('> 与生产函数（`lib/inject-text.js` / `lib/describe.js`）实时渲染，文案零手抄。');
 w('');
 
 // 统一前的块头（历史值，仅用于对照；生产代码已统一为「此刻」）
@@ -121,10 +123,10 @@ w('');
 // ── 三、三条路径文案差异 ──
 w('## 三、find_activity 的三条路径，文案长什么样');
 w('');
-const noFinding = buildProactiveNotice(S({ connection: 0.40, pride: 0.60 }), tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet);
-const withFinding = buildProactiveNotice(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet);
-const failed = buildProactiveNotice(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet);
-const contactBlk = buildProactiveNotice(S({ connection: 0.42, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
+const noFinding = bN(S({ connection: 0.40, pride: 0.60 }), tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet);
+const withFinding = bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet);
+const failed = bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet);
+const contactBlk = bN(S({ connection: 0.42, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
 
 const table = [
   ['找她（contact）', contactBlk],
@@ -132,12 +134,12 @@ const table = [
   ['独处 · 有产物', withFinding],
   ['独处 · 失败兜底', failed],
 ];
-w('| 路径 | 正文来源 | 尾标记 | 档位行 |');
+w('| 路径 | 描述层 | 正文来源 | 尾标记 |');
 w('|---|---|---|---|');
-w('| 找她 | `getPromptContext` = 45 格 / 开口动机覆盖 + urgency 尾注 + `proactiveOutlet.contact` | 边界句 | 有 |');
-w('| 独处 · 无产物 | `sceneOverride.find_activity[reason]` + `proactiveOutlet.find_activity` | 边界句 | 有 |');
-w('| 独处 · 有产物 | `buildFindingBody(finding)` —— 小标题+标题+网址+原图+摘要，**多行** | **冲浪尾句** | 有 |');
-w('| 独处 · 失败 | `failure` 一句兜底 | **冲浪尾句** | 有 |');
+w('| 找她 | 有 | `getPromptContext` = 45 格 + `proactiveOutlet.contact` | 边界句 |');
+w('| 独处 · 无产物 | 有 | `sceneOverride.find_activity[reason]` + `proactiveOutlet.find_activity` | 边界句 |');
+w('| 独处 · 有产物 | 有 | `buildFindingBody(finding)` —— 小标题+标题+网址+原图+摘要，**多行** | **冲浪尾句** |');
+w('| 独处 · 失败 | 有 | `failure` 一句兜底 | **冲浪尾句** |');
 w('');
 w('逐条渲染：');
 w('');

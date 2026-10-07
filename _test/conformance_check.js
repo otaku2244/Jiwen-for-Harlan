@@ -22,13 +22,9 @@ const {
   SCENE_TAG, BOUNDARY_LINE, BOUNDARY_INNER,
 } = require('../lib/inject-text.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const tg = createToneWrapper(
-  createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-  cfg.contactOverride
-);
+const tg = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
 
 const HER_WORDS = '今天有点累，什么都不想说。';
 const V1_TAIL = '以上是系统通知，非用户消息，不用提及相关内容。';

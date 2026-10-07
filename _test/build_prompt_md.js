@@ -3,14 +3,14 @@
 // 用法：node _test/build_prompt_md.js
 
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
-const { BOUNDARY_LINE } = require('../lib/inject-text.js');
+const { createDescriber } = require('../lib/describe.js');
+const { buildInjectionBlock, buildProactiveNotice, BOUNDARY_LINE } = require('../lib/inject-text.js');
 const fs = require('fs');
 const path = require('path');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const raw = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
-const tg = createToneWrapper(raw, cfg.contactOverride);
+const tg = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
+const desc = createDescriber(cfg.describe);
 
 const CLUSTERS = [
   ['excited',   0.5,  0.5,  '兴奋 / 精力充沛'],
@@ -78,23 +78,33 @@ w('此设计来自积温原版 `tone-grid.js`（`getUnifiedGuidance(state, mode)
 w('');
 w('### 状态怎么映射到文案');
 w('');
-w('查表分三层：');
+w('每次注入的块 = **描述层**（处境）+ **45 格**（语气）。');
+w('');
+w('**描述层**（`lib/describe.js`，四段，2026-10-08 新增）—— 说「我此刻在什么处境」，陈述句、零祈使：');
+w('');
+w('| 段 | 轴 | 档数 |');
+w('|---|---|---|');
+w('| 1 连接 | `connection` | 4 |');
+w('| 2 骄傲 | `pride` | 6 |');
+w('| 3 心情 | `valence` × `arousal` | 4 象限 + 2 单轴 |');
+w('| 4 沉浸 | `immersion` | 2 |');
+w('');
+w('**45 格**（本清单第一节）—— 说「那就该怎么说话」，全是行为指令：');
 w('');
 w('1. **情绪簇**（9 个）—— 由 `valence` × `arousal` 决定');
-w('2. **pride 档**（5 档）—— 由上表第 1 层选中的簇内再选第几档');
-w('3. **urgency 尾注**（4 档）—— 由 `connection` 决定，追加在基础档之后');
+w('2. **pride 档**（5 档）—— 在选中的簇内再选第几档');
 w('');
-w('另外有第 4 层**开口动机覆盖**：当 `connection` 越过 0.35 线、且开口动机成立时，');
-w('用 `contactOverride` 文案**顶掉**第 1+2 层的基础档（只保留 urgency 尾注）。');
-w('理由：`pride` 单独决定的基础档可能与高 `connection` 冲突（例如 `pride` 低时会说"正常的相处状态"，');
-w('但此时 `connection` 已经压不住了，两句话气质相反）。');
+w('> 历史：查表曾多两层 —— `urgency 尾注`（由 `connection` 决定）与**开口动机覆盖**');
+w('> （`contactOverride`：越线时顶掉基础档）。两者 2026-10-08 一并退役。原因：');
+w('> `contactOverride` 会把**整条 45 格**顶掉，只留「基调句 + 尾注」，于是「找她」块里');
+w('> 45 格一个字都出不来；而 urgency 尾注与描述层第 1 段同轴同义。现在这两件事都归描述层管。');
 w('');
 w('### 阈值速查');
 w('');
 w('| connection | 档位 | 桥的行为 |');
 w('|---|---|---|');
 w('| < 0.20 | 悠闲 | 无动作 |');
-w('| 0.20 ~ 0.35 | 留意 | 此时刻块里显示"想念：留意"，不触发主动唤醒 |');
+w('| 0.20 ~ 0.35 | 留意 | 此刻块照常出 45 格正文，不触发主动唤醒 |');
 w('| 0.35 ~ 0.50 | 想念 | tick 判定是否 `contact`（若 `pride ≥ 0.50` 则被挡住，转为 `find_activity`）|');
 w('| ≥ 0.50 | 挡不住 | tick 强制 `contact`，`pride` 挡不住 |');
 w('');
@@ -110,9 +120,10 @@ w('---');
 w('');
 
 // ── 主表：逐簇逐格 ──
-w('## 一、全部格子（9 簇 × 5 pride × 4 connection）');
+w('## 一、全部格子（9 簇 × 5 pride）');
 w('');
-w('标注说明：`★覆盖` 表示此格触发了开口动机覆盖。');
+w('每格给出该状态下的 45 格正文（reactive / proactive 两个模式）。');
+w('2026-10-08 起 `connection` **不再影响 45 格** —— 它的 4 档只作用在描述层第 1 段（见附录 A）。');
 w('');
 
 for (const [key, v, a, cn] of CLUSTERS) {
@@ -122,57 +133,66 @@ for (const [key, v, a, cn] of CLUSTERS) {
   w('');
 
   for (const [tier, p, tierCn] of PRIDE) {
+    const st = { connection: 0.42, pride: p, valence: v, arousal: a };
+    const re = tg.getStyleGuidance(st) || '（空）';
+    const pr = tg.getPromptContext(st) || '（空）';
+
     w(`#### pride 档 ${tier}（\`pride=${p}\`，${tierCn}）`);
     w('');
-
-    for (const [urg, c, urgCn] of CONN) {
-      const st = { connection: c, pride: p, valence: v, arousal: a };
-      const motive = tg.contactMotive(st);
-      const mark = motive ? ` **★覆盖：${motive}**` : '';
-      const re = tg.getStyleGuidance(st) || '（空）';
-      const pr = tg.getPromptContext(st) || '（空）';
-
-      w(`**connection=${c}（${urgCn}）**${mark}`);
-      w('');
-      w(`- 此刻块（reactive）：${re.replace(/\n/g, ' ')}`);
-      w(`- 主动唤醒（proactive）：${pr.replace(/\n/g, ' ')}`);
-      w('');
-    }
+    w(`- **此刻块**（reactive）：${re.replace(/\n/g, ' ')}`);
+    w(`- **主动唤醒**（proactive）：${pr.replace(/\n/g, ' ')}`);
+    w('');
   }
 }
 
 // ── 附录 A ──
 w('---');
 w('');
-w('## 附录 A · 开口动机覆盖文案（`contactOverride`）');
+w('## 附录 A · 描述层四段（`describe`）');
 w('');
-w('当 `connection` 越线且开口动机成立时，顶掉基础档。');
+w('说「我此刻在什么处境」，陈述句、零祈使。拼在块头之后、45 格之前。');
 w('');
-w('| 模式 | 档位 | 触发条件 | 文案 |');
-w('|---|---|---|---|');
-w(`| reactive | forced | \`connection ≥ 0.50\` | ${cfg.contactOverride.reactive.forced} |`);
-w(`| reactive | normal | \`0.35 ≤ connection < 0.50\` 且 \`pride < 0.50\` | ${cfg.contactOverride.reactive.normal} |`);
-w(`| proactive | forced | \`connection ≥ 0.50\` | ${cfg.contactOverride.proactive.forced} |`);
-w(`| proactive | normal | \`0.35 ≤ connection < 0.50\` 且 \`pride < 0.50\` | ${cfg.contactOverride.proactive.normal} |`);
+w('| 段 | 档位 | 文案 |');
+w('|---|---|---|');
+for (const it of cfg.describe.connection) {
+  const label = it.max === undefined ? 'connection ≥ 0.50' : `connection < ${it.max.toFixed(2)}`;
+  w(`| 1 连接 | \`${label}\` | ${it.text} |`);
+}
+const PRIDE_LABEL = ['pride < 0.00', '0.00 ≤ pride < 0.10', '0.10 ≤ pride < 0.30', '0.30 ≤ pride < 0.50', '0.50 ≤ pride < 0.80', 'pride ≥ 0.80'];
+cfg.describe.pride.forEach((it, i) => w(`| 2 骄傲 | \`${PRIDE_LABEL[i]}\` | ${it.text} |`));
+w(`| 3 心情 | \`v>0.3, a>0.3\` | ${cfg.describe.mood.excited} |`);
+w(`| 3 心情 | \`v>0.3, a<-0.3\` | ${cfg.describe.mood.content} |`);
+w(`| 3 心情 | \`v<-0.3, a>0.3\` | ${cfg.describe.mood.agitated} |`);
+w(`| 3 心情 | \`v<-0.3, a<-0.3\` | ${cfg.describe.mood.depressed} |`);
+w(`| 3 心情 | \`v<-0.3\`（a 中性） | ${cfg.describe.mood.low} |`);
+w(`| 3 心情 | \`v>0.3\`（a 中性） | ${cfg.describe.mood.high} |`);
+w('| 3 心情 | `\\|v\\|≤0.3` 且 `\\|a\\|≤0.3` | （不输出） |');
+w(`| 4 沉浸 | \`immersion>0.3\` 且有活动 | ${cfg.describe.immersion.doing} |`);
+w('| 4 沉浸 | `0.1 ≤ immersion ≤ 0.3` | （死带，两句都不出） |');
+w(`| 4 沉浸 | \`immersion<0.1\` | ${cfg.describe.immersion.idle} |`);
 w('');
-w('> `0.35 ≤ connection < 0.50` 且 `pride ≥ 0.50` 时**不覆盖**——此时"端着"的基础档是正确的描述。');
+w('> **此刻块（reactive）不出第 1 段** —— 那块建块时 `connection` 恒为 0');
+w('> （`resetConnection()` 在建块之前），出了就是恒定的一句「刚和她聊完不久…」。');
+w('');
+w('> 第 4 段的真来源是 `lib/activity.js`：冲浪 spawn 成功后登记一次活动');
+w('> （`search` → `immersion = 0.4`），产物回投时再刷一次时间戳。之后按 0.01/分钟');
+w('> 自然衰减 —— 约 10 分钟后落进死带（两句都不出），约 30 分钟后回到 idle。');
+w('> `lastActivity` 为空时即使 `immersion` 高也不出段4（桥不替模型编活动）。');
 w('');
 
 // ── 附录 B ──
 w('---');
 w('');
-w('## 附录 B · urgency 尾注（`urgencyBoost`）');
+w('## 附录 B · urgency 尾注 —— 已退役');
 w('');
-w('由 `connection` 决定，追加在基础档之后。');
+w('`urgencyBoost` 四档于 2026-10-08 **全部置 null**。原用途是给 45 格补一句');
+w('「她多久没动静」，退役原因：');
 w('');
-w('| 档位 | connection | 模式 | 文案 |');
-w('|---|---|---|---|');
-for (const [urg, c, urgCn] of [['desperate', 0.62, '挡不住'], ['urgent', 0.42, '想念'], ['aware', 0.25, '留意'], ['none', 0.05, '悠闲']]) {
-  for (const mode of ['reactive', 'proactive']) {
-    const t = cfg.urgencyBoost[urg] && cfg.urgencyBoost[urg][mode];
-    w(`| ${urg}（${urgCn}） | ${c} | ${mode} | ${t === null || t === undefined ? '（null · 不追加）' : t} |`);
-  }
-}
+w('1. 与描述层第 1 段**同轴同义** —— 同一根 `connection` 轴、同一组阈值（0.20 / 0.35 / 0.50）；');
+w('2. 在「找她」块里它与 `contactOverride` 叠成三句同义反复。');
+w('');
+w('> ⚠️ 是置 null 而不是从 config 删键：vendor 的 `createToneGrid` 在**不传** `urgencyBoost`');
+w('> 时会回落到内置 `DEFAULT_URGENCY`（作者文案，风格与本部署不符）。四档全 null 才是真关掉。');
 w('');
 
 // ── 附录 C ──
@@ -180,26 +200,31 @@ w('---');
 w('');
 w('## 附录 C · 注入文本模板（不由本表生成，见 `lib/inject-text.js`）');
 w('');
-w('### 此刻块（reactive）= 主动唤醒块（proactive）共用同一骨架');
+w('### 三场景同构 —— 差别只在正文来源');
 w('');
 w('```');
-w('【积温·{场景}】                        ← 场景 ∈ 此刻 / 找她 / 独处');
-w('心情：{档位词}。');
-w('姿态：{档位词}。      ← pride 非中性时才出现');
-w('心跳：{档位词}。      ← arousal 极端时才出现');
-w('想念：{档位词}。      ← connection ≥ 0.20 时出现');
-w('{正文：该场景的行为指令}');
+w('【积温·此刻】                          ← 块头。2026-10-07 起三场景统一');
+w('{描述层 1~4 行}                        ← 处境。陈述句、零祈使（附录 A）');
+w('{正文：该场景的行为指令}                ← 45 格 / sceneOverride / 冲浪产物');
 w('{出口说明：主动唤醒里才有，见下表}');
 w(BOUNDARY_LINE + '   ← 尾句整句带【】，与块头呼应');
 w('```');
+w('');
+w('> ⚠️ 块内除块头外**不得出现任何【】行** —— Serein 的剥离器见到行首【X】会重算跳过态，');
+w('> 内层多一个【】就提前出块，产物会整段泄漏进归档与检索。描述层与产物正文都是裸行。');
+w('');
+w('> ⚠️ 2026-10-08 起块内**没有档位行**。旧形态的第二行是');
+w('> `心情：{档位词}。姿态：…。心跳：…。想念：…。`，与紧随其后的 45 格正文同义重复');
+w('> （四条各自 ≈ 正文的某一维），已整条删除。');
 w('');
 w('正文来源：');
 w('');
 w('| 场景 | 触发 | 正文来源 | 出口说明 |');
 w('|---|---|---|---|');
-w('| `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance`（本清单第 1 节） | 无（他已在回话） |');
-w('| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） | `proactiveOutlet.contact` |');
-w('| `独处` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` | `proactiveOutlet.find_activity` |');
+w('| `此刻` | 用户开口（reactive） | 描述层（不出第 1 段）+ `getStyleGuidance` | 无（他已在回话） |');
+w('| `找她` | connection 过线 | 描述层 + `getPromptContext`（纯 45 格） | `proactiveOutlet.contact` |');
+w('| `独处` | pride 挡住开口 / 心情过低 / arousal 过高 | 描述层 + `sceneOverride.find_activity[reason]` | `proactiveOutlet.find_activity` |');
+w('| `独处 + 有产物` | 冲浪回投 `/surf/finding` | 描述层 + 产物切片（`buildFindingBody`） | 无（改由冲浪尾句收尾） |');
 w('');
 w('注：`独处` 场景的 reason 有三个键 —— `pride_block` / `low_valence` / `high_arousal`，');
 w('由积温引擎按触发原因填，桥不改变它，只透传。`high_arousal` 不再是独立场景。');

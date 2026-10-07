@@ -27,13 +27,9 @@ const {
   SCENE_TAG, BOUNDARY_LINE, BOUNDARY_INNER, SURF_TAIL_LINE, SURF_BOUNDARY_INNER, BLOCK_TAILS,
 } = require('../lib/inject-text.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const tg = createToneWrapper(
-  createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-  cfg.contactOverride
-);
+const tg = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
 
 let pass = 0, total = 0, skipped = 0;
 function check(name, cond, extra) {
@@ -155,6 +151,15 @@ const allBlocks = [];
   const heads = new Set(allBlocks.map(([, b]) => b.split('\n')[0]));
   check('块头统一为【积温·此刻】（2026-10-07 起不再按场景区分）',
     [...heads].every((h) => /^【积温·此刻】$/.test(h)), [...heads]);
+
+  // ── 块内不再有档位行（2026-10-08 起整条删除）──
+  //    `心情：X。姿态：X。心跳：X。想念：X。` 与紧随其后的 45 格正文同义重复：
+  //    四条各自 ≈ 45 格的某一维，而 45 格粒度更细、恰好覆盖同一件事。
+  //    留着它 = 同一个块里两句话在说同一件事，模型可能只读到粗的那句。
+  //    这条断言是"不许补回来"的机器守护（人写注释会被忽略，红测试不会）。
+  const stateLineLeak = allBlocks.filter(([, b]) => /^(心情|姿态|心跳|想念)：/m.test(b));
+  check('块内不含档位行（心情/姿态/心跳/想念，2026-10-08 已删）',
+    stateLineLeak.length === 0, stateLineLeak.slice(0, 3).map((x) => x[0]));
 }
 
 // ════════════════════════════════════════════════════

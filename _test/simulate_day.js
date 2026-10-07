@@ -13,11 +13,17 @@ const fs = require('fs');
 const path = require('path');
 const { createJiwen } = require('../vendor/jiwen.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
+const { createDescriber } = require('../lib/describe.js');
 const { buildInjectionBlock, buildProactiveNotice } = require('../lib/inject-text.js');
 
 const tonePath = path.join(__dirname, '..', 'config', 'tone-harlan.json');
 const toneCfg = JSON.parse(fs.readFileSync(tonePath, 'utf8'));
 const toneGrid = createToneGrid({ profiles: toneCfg.profiles, urgencyBoost: toneCfg.urgencyBoost });
+const desc = createDescriber(toneCfg.describe);
+
+// 描述层是 buildXxx 新增的末位参数 —— 包一层，免得每个调用点手写。
+const bN = (st, g, opts, so, po) => buildProactiveNotice(st, g, opts, so, po, desc);
+const bI = (st, g) => buildInjectionBlock(st, g, desc);
 
 // 虚拟时钟
 let VNOW = new Date('2026-10-05T08:00:00+08:00').getTime();
@@ -109,7 +115,7 @@ async function step(minutes, note) {
   for (const c of cases) {
     await jiwen.applyDelta(c.delta);
     const s = await jiwen.getState();
-    const block = buildInjectionBlock(s, toneGrid);
+    const block = bI(s, toneGrid);
     const styleLine = block.split('\n').slice(1).join(' ').slice(0, 70);
     console.log(`  ${c.name}`);
     console.log(`    状态: p=${s.pride.toFixed(2)} v=${s.valence.toFixed(2)} a=${s.arousal.toFixed(2)}`);
@@ -119,7 +125,7 @@ async function step(minutes, note) {
   console.log('\n════════ 场景四：主动唤醒通知原文 ════════');
   await jiwen.applyDelta({ connection: 0.55, pride: 0.4 });
   const sp = await jiwen.getState();
-  console.log(buildProactiveNotice(sp, toneGrid, { scene: 'contact' }, toneCfg.sceneOverride, toneCfg.proactiveOutlet));
+  console.log(bN(sp, toneGrid, { scene: 'contact' }, toneCfg.sceneOverride, toneCfg.proactiveOutlet));
 
   // 落盘
   const out = path.join(__dirname, '.run', 'sim-day.json');

@@ -32,7 +32,7 @@ function walk(node, trail, out) {
 // 顶层的 _xxx_comment 是说明文档，不扫
 
 const texts = [];
-for (const top of ['profiles', 'urgencyBoost', 'contactOverride', 'sceneOverride', 'proactiveOutlet']) {
+for (const top of ['profiles', 'urgencyBoost', 'sceneOverride', 'proactiveOutlet', 'describe']) {
   if (cfg[top]) walk(cfg[top], top, texts);
 }
 

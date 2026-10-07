@@ -158,9 +158,11 @@ function check(name, cond, detail) {
   check('注入块含风格指令（tone grid 生效）',
     lastMsg && /(随性自然|像和熟人闲聊|矜持自持|得体、温和|高冷简练)/.test(lastMsg.content),
     lastMsg ? lastMsg.content.split('\n').slice(1, 3).join(' / ') : '');
+  // 2026-10-08 起块内没有档位行，探针改用 45 格正文首行的簇名。
+  // 中性态簇 = neutral，低谷态簇 = depressed —— 正好能证明 NEUTRAL_SEED 生效。
   check('开局状态为中性而非低谷（NEUTRAL_SEED 生效）',
-    lastMsg && lastMsg.content.includes('心情：中性'),
-    lastMsg ? (lastMsg.content.match(/心情：[^。]*。/) || [''])[0] : '');
+    lastMsg && /^neutral，/m.test(lastMsg.content) && !/^depressed，/m.test(lastMsg.content),
+    lastMsg ? (lastMsg.content.split('\n').find((l) => /^(neutral|depressed)，/.test(l)) || '') : '');
 
   // ── 用例 3b：判定器按「轮次」去重（工具轮）──
   // 模型调工具后 Operit 会用**同一份 messages** 再发一次请求。
@@ -203,6 +205,41 @@ function check(name, cond, detail) {
   await wait(200);
   check('非 chat 路径原样透传', upstreamReceived && upstreamReceived.path === '/v1/models',
     upstreamReceived && upstreamReceived.path);
+
+  // ── 用例 7：冲浪产物回投 → 活动登记（描述层段4 的真来源）──
+  // 这条是**跨进程**实证：桥进程内 recordActivity 真的把活动写进了引擎状态，
+  // 且写的是中文 label（英文 type 不进模型可见文本）。
+  // ⚠️ 登记发生在 fireProactive **之前**，所以哪怕此刻正逢静默时段（投递被挡）
+  //    也不影响这条断言 —— 与挂钟无关。
+  const sf = await req(BRIDGE_PORT, '/surf/finding', {
+    ok: true, title: 'Attention Is All You Need',
+    url: 'https://arxiv.org/abs/1706.03762', note: '把注意力机制从循环结构里拆出来单独用。',
+  }, { authorization: 'Bearer test-token-at-least-24-chars-abcdef' });
+  check('冲浪产物回投被接受（200）', sf.status === 200, 'status=' + sf.status);
+
+  // 登记后的一轮真实对话：此刻块里必须出现段4 的 doing 句（不再是恒定 idle）
+  await wait(300);
+  const payload3 = JSON.parse(JSON.stringify(payload));
+  payload3.messages[3] = { role: 'user', content: '刚忙完？' };
+  await req(BRIDGE_PORT, '/v1/chat/completions', payload3, {
+    authorization: 'Bearer test-token-at-least-24-chars-abcdef',
+    'x-serein-window-id': 'operit',
+  });
+  await wait(300);
+  const lastMsg3 = upstreamReceived && upstreamReceived.body.messages[3];
+  check('注入块里出现段4 的「刚才在网页检索。」',
+    lastMsg3 && lastMsg3.content.includes('刚才在网页检索。'),
+    lastMsg3 ? (lastMsg3.content.split('\n').find((l) => /刚才在|没在做什么/.test(l)) || '(无段4)') : 'null');
+  check('注入块里没有把英文 type 写进文本', lastMsg3 && !lastMsg3.content.includes('search'));
+
+  // 落盘是 1s 去抖（scheduleFlush），读盘前必须等过这一拍。
+  await wait(1400);
+  const st2 = JSON.parse(fs.readFileSync(STATE, 'utf8'));
+  check('活动已登记进引擎并落盘（immersion = 0.40）', Math.abs(st2.immersion - 0.4) < 1e-9,
+    'immersion=' + st2.immersion);
+  check('lastActivity 记的是中文 label / 英文 type',
+    st2.lastActivity && st2.lastActivity.label === '网页检索' && st2.lastActivity.type === 'search',
+    JSON.stringify(st2.lastActivity));
 
   child.kill('SIGTERM');
   await wait(400);

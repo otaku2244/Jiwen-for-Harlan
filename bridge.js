@@ -36,9 +36,10 @@ loadEnvFile(envPath);
 
 const { createJiwen } = require('./vendor/jiwen.js');
 const { createToneGrid } = require('./vendor/tone-grid.js');
-const { createToneWrapper } = require('./lib/tone-wrap.js');
+const { createDescriber } = require('./lib/describe.js');
 const { buildInjectionBlock, buildProactiveNotice, stripJiwenBlocks, assertBlockShape } = require('./lib/inject-text.js');
 const { createLoopbackGuard } = require('./lib/loopback.js');
+const { recordActivity } = require('./lib/activity.js');
 const { createSceneCooldown, createDialogDedup } = require('./lib/repeat-guard.js');
 const { analyzeDialog } = require('./lib/analyzer.js');
 const { createMcpHandler } = require('./lib/mcp.js');
@@ -101,6 +102,12 @@ const CFG = {
   surfEntry: process.env.SURF_ENTRY || 'dist/index.js',
   surfTimeoutMs: parseInt(process.env.SURF_TIMEOUT_MS || '180000', 10),
   surfFindingPath: process.env.SURF_FINDING_PATH || '/surf/finding',
+  // ── 活动登记（描述层段4 的真来源）─────────────────────────────
+  // `type` 决定 immersion 取多少（vendor 的 immersionMap：search = 0.4），
+  // `label` 是**唯一会进模型可见文本**的那一项（lib/describe.js 的 `{label}`）。
+  // 所以 label 写中文短语、type 写引擎认得的英文枚举，两者别混。
+  surfActivityType: process.env.SURF_ACTIVITY_TYPE || 'search',
+  surfActivityLabel: process.env.SURF_ACTIVITY_LABEL || '网页检索',
 };
 
 // ── 时间（业务时区）──────────────────────────────
@@ -179,26 +186,29 @@ function scheduleFlush() {
   }, 1000);
 }
 
-// ── 语调网格 ──────────────────────────────────────
+// ── 语调网格 + 描述层 ──────────────────────────────
+// 2026-10-08 起不再有 `lib/tone-wrap.js` 覆盖层：它会在 connection 过线时
+// 把整条 45 格顶掉，「找她」块里 45 格一个字都出不来。那件事现在归描述层管。
 let toneGrid = null;
+let describer = null;
 let SCENE_OVERRIDE = {};
 let PROACTIVE_OUTLET = {};
 try {
   const tonePath = path.join(__dirname, 'config', 'tone-harlan.json');
   const toneCfg = JSON.parse(fs.readFileSync(tonePath, 'utf8'));
-  toneGrid = createToneWrapper(
-    createToneGrid({
-      profiles: toneCfg.profiles,
-      urgencyBoost: toneCfg.urgencyBoost,
-    }),
-    toneCfg.contactOverride
-  );
+  toneGrid = createToneGrid({
+    profiles: toneCfg.profiles,
+    // ⚠️ 必须显式传：config 里四档全 null = 关掉 urgency 行。
+    //    不传的话 vendor 会回落到内置 DEFAULT_URGENCY（作者文案，风格不符）。
+    urgencyBoost: toneCfg.urgencyBoost,
+  });
+  describer = createDescriber(toneCfg.describe);
   SCENE_OVERRIDE = toneCfg.sceneOverride || {};
   PROACTIVE_OUTLET = toneCfg.proactiveOutlet || {};
-  log('INFO', 'tone grid loaded: tone-harlan.json (with contact-override wrapper)');
+  log('INFO', 'tone grid loaded: tone-harlan.json (45 格 + 描述层，无覆盖层)');
 } catch (e) {
   log('ERROR', 'tone grid load failed, falling back to defaults: ' + e.message);
-  toneGrid = createToneWrapper(createToneGrid());
+  toneGrid = createToneGrid();
 }
 
 // ── 回环守卫 ──────────────────────────────────────
@@ -245,12 +255,17 @@ const jiwen = createJiwen({
 // 所以指纹取**数值**而非文本：五轴各取 2 位小数拼成签名。
 //   · 签名变了 → 注入（哪怕渲染文本相同，状态语义已经不同）
 //   · 签名没变但超节流窗 → 注入（保持存在感）
+//
+// ⚠️ `immersion` 必须在内。自 2026-10-08 起它也是**块文本的一部分**
+//    （描述层段4 读它）：冲浪跑完 → immersion 0.4，段4 从「没在做什么特别的事。」
+//    变成「刚才在网页检索。」，而另外四轴可能一个数都没动。
+//    漏掉它 = 段4 的变化被节流吃掉，模型只看到旧那句。
 let lastInjectSig = null;
 let lastInjectAt = 0;
 function shouldInject(block, state) {
   const now = Date.now();
   const sig = state
-    ? [state.connection, state.pride, state.valence, state.arousal]
+    ? [state.connection, state.pride, state.valence, state.arousal, state.immersion]
         .map((x) => (Number(x) || 0).toFixed(2)).join(',')
     : block;
   const changed = sig !== lastInjectSig;
@@ -424,10 +439,15 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
         const finding = ok ? {
           title: payload.title, url: payload.url, image: payload.image, note: payload.note,
         } : null;
+        // 冲浪刚跑完 → 刷新活动时间戳，让段4 说的是「刚才在网页检索。」
+        // 而不是"半小时前"。失败分支照样记：他确实去翻了，只是没翻到东西。
+        await recordActivity(jiwen, {
+          type: CFG.surfActivityType, label: CFG.surfActivityLabel,
+        }, log);
         const st = await jiwen.getState();
         const notice = buildProactiveNotice(st, toneGrid, {
           scene: 'find_activity', reason: 'surf', finding, failure,
-        }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
+        }, SCENE_OVERRIDE, PROACTIVE_OUTLET, describer);
         await fireProactive(notice, st, { scene: 'find_activity', reason: 'surf' });
         log('INFO', 'surf finding received' + (ok ? '' : ' (failure branch)'));
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -488,7 +508,7 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     let block = '';
     try {
       state = await jiwen.getState();
-      block = buildInjectionBlock(state, toneGrid);
+      block = buildInjectionBlock(state, toneGrid, describer);
     } catch (e) {
       log('WARN', 'build block failed: ' + e.message);
     }
@@ -600,7 +620,7 @@ async function tickOnce() {
         // 冷却：contact 天然不重复（触发后 connection 归零），但"她整日不来"时
         // 一天能触发 4 次以上，统一纳管避免与 find_activity 抢日上限时失去约束。
         if (!actionCooldown.ok('contact')) { logCooldownSkip('contact'); continue; }
-        const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
+        const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE, PROACTIVE_OUTLET, describer);
         const sent = await fireProactive(notice, st, { scene: 'contact' });
         // ⚠️ 只有真投出去才记账：被静默时段/日上限挡掉的轮次不该吃掉冷却。
         if (sent) actionCooldown.mark('contact');
@@ -611,8 +631,11 @@ async function tickOnce() {
         //   find_activity 的触发源是"惦记 + 嘴硬"这个持续状态，
         //   状态不消失时每 tick 都会再判一次；不拦就是 50~110 条/天。
         if (!actionCooldown.ok('find_activity')) { logCooldownSkip('find_activity'); continue; }
-        // 桥不碰"活动"本身：不发英文活动枚举、不调 setActivity。
-        // 只投一条独处通知，具体做什么由 Operit 侧工作流与模型自理。
+        // 关于"桥碰不碰活动"：桥**不**决定他做什么，也不发英文活动枚举 ——
+        // 具体做什么由 Operit 侧工作流与模型自理。
+        // 唯一的例外是冲浪跑完之后的那一条 `setActivity` —— 那不是"安排活动"，
+        // 而是把已经发生的事**如实登记**给引擎，供描述层段4 使用
+        // （见 lib/activity.js；登记点挂在子进程的 'spawn' 事件上）。
         //
         // 场景统一为 find_activity，reason（pride_block / low_valence / high_arousal）
         // 只作排查线索，不再分叉成独立 scene。
@@ -637,7 +660,7 @@ async function tickOnce() {
           actionCooldown.mark('find_activity');
           continue;
         }
-        const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
+        const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE, PROACTIVE_OUTLET, describer);
         const sent = await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
         if (sent) actionCooldown.mark('find_activity');
       }
@@ -663,6 +686,9 @@ function inQuietHours() {
 // 闸门（静默时段 / 日上限）由调用方在 spawn **之前**判过，这里不重复判。
 // 结果不在这里处理：surf 跑完会 POST 回 /surf/finding，那条路径负责拼块与投递。
 // surf 自己也失败时（进程崩、超时）什么都不回 —— 由这里打印兜底日志。
+//
+// 副作用：子进程 'spawn' 成功后登记一次活动（immersion = 0.4），
+// 描述层段4 因此才有「刚才在网页检索。」可讲。见 lib/activity.js。
 let surfInFlight = false;
 function spawnSurf(reason) {
   if (surfInFlight) { log('INFO', 'surf already in flight, skip'); return; }
@@ -689,6 +715,15 @@ function spawnSurf(reason) {
   const cap = (buf) => { out += buf.toString('utf8'); if (out.length > 8000) out = out.slice(-8000); };
   child.stdout.on('data', cap);
   child.stderr.on('data', cap);
+  // ── 活动登记：只在进程**真的起来了**之后 ──
+  // 用 'spawn' 而不是在函数开头记：entry 路径配错 / EACCES 这类情况下
+  // spawn 会走 'error' 而永不 'spawn'，那时他其实什么都没做，
+  // 记了就等于让段4 声称一件没发生的事（describe.js：不编造活动）。
+  child.on('spawn', () => {
+    recordActivity(jiwen, {
+      type: CFG.surfActivityType, label: CFG.surfActivityLabel,
+    }, log).catch(() => { /* recordActivity 内部已兜底并记日志 */ });
+  });
   const timer = setTimeout(() => {
     log('ERROR', `surf timeout after ${CFG.surfTimeoutMs}ms, killing pid ${child.pid}`);
     try { child.kill('SIGKILL'); } catch (_) { /* 已退出 */ }

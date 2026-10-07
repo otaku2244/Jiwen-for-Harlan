@@ -18,7 +18,7 @@ const path = require('path');
 const { createLoopbackGuard, normText } = require('../lib/loopback.js');
 const { stripJiwenBlocks, assertBlockShape, buildProactiveNotice, BOUNDARY_LINE } = require('../lib/inject-text.js');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
+const { createDescriber } = require('../lib/describe.js');
 
 let pass = 0, total = 0;
 function check(name, cond, extra) {
@@ -197,8 +197,9 @@ console.log('\n[5] bridge.js 顺序断言（防回归）');
   check('fireProactive 里有 remember',
     /loopbackGuard\.remember\(/.test(src));
   // ── 方案 A：回环让位，不注入此刻块 ──
-  //   回环那轮的 user 消息就是通知原文（自带档位行 + proactive 正文 + 出口说明），
-  //   此刻块是 reactive 语域、且档位行是衰减后的另一份快照 → 必须让位。
+  //   回环那轮的 user 消息就是通知原文（proactive 正文 + 出口说明），
+  //   此刻块是 reactive 语域、且正文是衰减后的另一份快照 → 必须让位。
+  //   （2026-10-08 起不再有档位行，语域差异全部落在正文上。）
   check('回环命中时不注入（注入条件带 !loopback）',
     /if\s*\(block && !loopback && shouldInject\(block, state\)\)/.test(src));
   check('回环跳过注入有日志标记（否则线上看不出让位是否生效）',
@@ -210,25 +211,35 @@ console.log('\n[6] 让位的前提 —— 通知自身内容完整（方案 A �
 // ════════════════════════════════════════════════════
 {
   const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-  const grid = createToneWrapper(
-    createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-    cfg.contactOverride
-  );
+  const grid = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
+  const desc = createDescriber(cfg.describe);
 
   const stC = { connection: 0.62, pride: 0.15, valence: 0.05, arousal: 0.05 };
-  const notice = buildProactiveNotice(stC, grid, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  const ctxLines = desc(stC);
+  const notice = buildProactiveNotice(stC, grid, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet, desc);
   check('找她通知形状合规（assertBlockShape 零问题）', assertBlockShape(notice).length === 0, assertBlockShape(notice));
-  check('找她通知自带档位行', /想念：/.test(notice));
-  check('找她通知用 proactive 语域正文', notice.includes(cfg.contactOverride.proactive.forced));
-  check('找她通知不含 reactive 语域正文（让位后才不会打架）',
-    !notice.includes(cfg.contactOverride.reactive.forced));
+  check('找她通知不带档位行（2026-10-08 起已整条删除）',
+    !/^(心情|姿态|心跳|想念)：/m.test(notice),
+    notice.split('\n').slice(0, 2).join(' / '));
+  // 2026-10-08 变体②：contactOverride 已退役 —— 它过去会在 connection 过线时
+  // 把**整条 45 格**顶掉，只留一句「基调 + 尾注」。现在正文必须是 45 格本体。
+  check('找她通知正文就是 45 格本体（contactOverride 已退役，不再顶掉 45 格）',
+    notice.includes(grid.getPromptContext(stC)),
+    grid.getPromptContext(stC));
+  check('找她通知带描述层（处境句在块内）',
+    ctxLines.length > 0 && notice.includes(ctxLines[0]), ctxLines);
+  // urgencyBoost 四档全 null → 块内不该出现任何一条旧 urgency 句
+  check('找她通知不含 urgency 尾注（urgencyBoost 已退役）',
+    !/她安静得有点久了|她很久没消息了|她好像没什么动静/.test(notice),
+    notice.split('\n')[1]);
   check('找她通知自带出口说明', notice.includes(cfg.proactiveOutlet.contact));
 
   const stF = { connection: 0.10, pride: 0.20, valence: -0.45, arousal: 0.05 };
-  const fa = buildProactiveNotice(stF, grid, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  const fa = buildProactiveNotice(stF, grid, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet, desc);
   check('独处通知形状合规', assertBlockShape(fa).length === 0, assertBlockShape(fa));
   check('独处通知自带 sceneOverride 正文', fa.includes(cfg.sceneOverride.find_activity.low_valence));
   check('独处通知自带出口说明', fa.includes(cfg.proactiveOutlet.find_activity));
+  check('独处通知也带描述层', fa.includes(desc(stF)[0]));
 }
 
 // ════════════════════════════════════════════════════

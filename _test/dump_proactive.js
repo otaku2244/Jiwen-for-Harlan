@@ -6,24 +6,21 @@
 // 全部文本从 config/tone-harlan.json 现场装配，不手抄，改配置后重跑即可。
 //
 // 关键结构（容易误判，写在这里）：
-//   contact 场景的正文**不总是** 45 格。tone-wrap 的 contactOverride 会整条顶掉基础档，
-//   只保留 urgency 尾注。于是 contact 只有三种形态：
-//     c ≥ 0.50                    → forced 覆盖 + desperate 尾注
-//     0.35 ≤ c < 0.50 且 p < 0.50 → normal 覆盖 + urgent 尾注
-//     0.35 ≤ c < 0.50 且 p ≥ 0.50 → 45 格（pride 档 4/5）+ urgent 尾注   ← 只有这里进 45 格
-//   find_activity 场景的正文来自 sceneOverride，固定 4 条，与状态无关。
+//   contact（找她）的正文 = **描述层 + 45 格**。
+//   ⚠️ 2026-10-08 之前不是这样：contactOverride 会在 connection 过线时把**整条 45 格**顶掉，
+//      只留「基调句 + urgency 尾注」，于是找她块里 45 格一个字都出不来。那层已退役。
+//   find_activity（独处）的正文来自 sceneOverride，固定 4 条，与状态无关；
+//   有冲浪产物时换成产物切片（`buildFindingBody`）。
 
 const fs = require('fs');
 const path = require('path');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
-const { buildProactiveNotice, meaningfulLines, BOUNDARY_LINE } = require('../lib/inject-text.js');
+const { createDescriber } = require('../lib/describe.js');
+const { buildProactiveNotice, BOUNDARY_LINE } = require('../lib/inject-text.js');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const tg = createToneWrapper(
-  createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-  cfg.contactOverride
-);
+const tg = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
+const desc = createDescriber(cfg.describe);
 
 const CLUSTERS = {
   excited:   { v: 0.5,  a: 0.5  },
@@ -39,7 +36,7 @@ const CLUSTERS = {
 const PRIDE = { 1: -0.05, 2: 0.2, 3: 0.4, 4: 0.65, 5: 0.9 };
 
 const notice = (st, scene, reason) =>
-  buildProactiveNotice(st, tg, { scene, reason }, cfg.sceneOverride, cfg.proactiveOutlet);
+  buildProactiveNotice(st, tg, { scene, reason }, cfg.sceneOverride, cfg.proactiveOutlet, desc);
 
 const out = [];
 const w = (s = '') => out.push(s);
@@ -56,26 +53,18 @@ w();
 w('| # | 段落 | 来源 | 说明 |');
 w('|---|---|---|---|');
 w('| ① | `【积温·此刻】` | `SCENE_TAG` | 块头。2026-10-07 起三场景统一，不再区分 |');
-w('| ② | 档位行 `心情：… 姿态：… 心跳：… 想念：…` | `meaningfulLines()` | 只挑"值得说"的行，中性行不出现（心情除外） |');
-w('| ③ | 正文 | 见下两节 | 语调指令 |');
-w('| ④ | 出口说明 | `proactiveOutlet` | **只在主动唤醒加**，此刻块没有 |');
-w('| ⑤ | 尾句 | `BOUNDARY_LINE` | 固定，压尾 |');
+w('| ② | 描述层 1~4 行 | `describe` | **2026-10-08 新增**。处境陈述，见 3.1 |');
+w('| ③ | ~~档位行~~ | — | **2026-10-08 已整条删除**（与 45 格同义重复，详见 `lib/inject-text.js` 文件头） |');
+w('| ④ | 正文 | 见下两节 | 45 格 / `sceneOverride` / 冲浪产物 |');
+w('| ⑤ | 出口说明 | `proactiveOutlet` | **只在主动唤醒加**，此刻块没有 |');
+w('| ⑥ | 尾句 | `BOUNDARY_LINE` / `SURF_TAIL_LINE` | 固定，压尾 |');
 w();
 w('---');
 w();
 w('## 一、找她（contact）');
 w();
 w('触发条件由积温引擎给：`connection` 越过考虑线（0.35）。');
-w('正文取决于 **pride 闸门**，所以只有三种形态——');
-w();
-w('| 形态 | 条件 | 正文构成 |');
-w('|---|---|---|');
-w('| **A 强制** | `c ≥ 0.50` | `contactOverride.proactive.forced` ＋ `urgencyBoost.desperate.proactive` |');
-w('| **B 常规** | `0.35 ≤ c < 0.50` 且 `pride < 0.50` | `contactOverride.proactive.normal` ＋ `urgencyBoost.urgent.proactive` |');
-w('| **C 被 pride 挡住** | `0.35 ≤ c < 0.50` 且 `pride ≥ 0.50` | **45 格之一**（pride 档 4/5）＋ `urgencyBoost.urgent.proactive` |');
-w();
-w('⚠️ 只有形态 C 会把 45 格正文带进主动唤醒。A / B 两种形态下 45 格被整条顶掉，');
-w('   只有档位行还在变。');
+w('正文 = **描述层 + 45 格**。`pride` 只决定 45 格取哪一档，**不再有覆盖分支**。');
 w();
 
 function block(title, st, scene, reason) {
@@ -90,26 +79,26 @@ function block(title, st, scene, reason) {
   w();
 }
 
-block('形态 A · 强制（c ≥ 0.50）',
-  { connection: 0.62, pride: 0.20, valence: 0.0, arousal: 0.0, immersion: 0.10 }, 'contact');
-block('形态 B · 常规（0.35 ≤ c < 0.50，pride < 0.50）',
+block('开口动机成立（c 过线，pride 不高）',
   { connection: 0.42, pride: 0.20, valence: 0.0, arousal: 0.0, immersion: 0.10 }, 'contact');
-block('形态 C · 被 pride 挡住（0.35 ≤ c < 0.50，pride ≥ 0.50）',
+block('端着（c 过线但 pride 高）',
   { connection: 0.42, pride: 0.65, valence: 0.0, arousal: -0.5, immersion: 0.10 }, 'contact');
+block('强制线以上（c ≥ 0.50）',
+  { connection: 0.62, pride: 0.20, valence: 0.0, arousal: 0.0, immersion: 0.10 }, 'contact');
+block('心情也在低位（c 过线 + v/a 双低）',
+  { connection: 0.42, pride: 0.20, valence: -0.6, arousal: -0.6, immersion: 0.10 }, 'contact');
 
-w('### 形态 C 会出现的全部正文（45 格 × pride 档 4/5）');
+w('### 找她会出现的全部 45 格正文（9 簇 × 5 档 = 45 条）');
 w();
-w('九簇 × 两档 = 18 条。这是 45 格中唯一能进主动唤醒的部分。');
+w('下表取 `proactive` 列。`reactive` 列的同格文案略有不同（回复 vs 开口），本清单不重复展开，');
+w('见 `_test/all-prompts.txt`。');
 w();
-w('| 簇 | pride 档 | 正文（正文之后统一接 `urgencyBoost.urgent.proactive`） |');
+w('| 簇 | pride 档 | 45 格正文（proactive） |');
 w('|---|---|---|');
 for (const [name, va] of Object.entries(CLUSTERS)) {
-  for (const tier of [4, 5]) {
+  for (const tier of [1, 2, 3, 4, 5]) {
     const st = { connection: 0.42, pride: PRIDE[tier], valence: va.v, arousal: va.a, immersion: 0.1 };
-    const body = tg.getPromptContext(st);
-    const lines = body.split('\n');
-    const core = lines.slice(0, lines.length - 1).join(' '); // 去掉 urgency 尾注
-    w(`| \`${name}\` | ${tier} | ${core} |`);
+    w(`| \`${name}\` | ${tier} | ${(tg.getPromptContext(st) || '').replace(/\n/g, ' ')} |`);
   }
 }
 w();
@@ -117,7 +106,8 @@ w('---');
 w();
 w('## 二、独处（find_activity）');
 w();
-w('正文来自 `sceneOverride.find_activity[reason]`，**与状态无关**（档位行另算）。');
+w('正文来自 `sceneOverride.find_activity[reason]`，**与状态无关**。');
+w('描述层照常拼在前面 —— 它说的是"我此刻在什么处境"，与"我该去做什么"不冲突。');
 w('引擎给三个 reason，另有一条 `default` 兜底。');
 w();
 for (const [reason, st] of [
@@ -130,47 +120,85 @@ for (const [reason, st] of [
   block('reason = `' + reason + '`', st, 'find_activity', key);
 }
 
+w('### 独处 + 有冲浪产物');
+w();
+w('正文换成产物切片，出口说明与 sceneOverride 正文都停用，尾句换成 `SURF_TAIL_LINE`。');
+w('描述层保留 —— 段4 这时说的是「刚才在网页检索。」（冲浪跑完刚登记过活动）。');
+w();
+{
+  const st = {
+    connection: 0.42, pride: 0.65, valence: -0.05, arousal: 0.05,
+    immersion: 0.40,
+    lastActivity: { type: 'search', label: '网页检索', at: new Date().toISOString() },
+  };
+  w('```text');
+  w(buildProactiveNotice(st, tg, {
+    scene: 'find_activity', reason: 'surf',
+    finding: { title: 'Attention Is All You Need', url: 'https://arxiv.org/abs/1706.03762', note: '把注意力机制从循环结构里拆出来单独用，序列建模不再依赖逐步递归。' },
+  }, cfg.sceneOverride, cfg.proactiveOutlet, desc));
+  w('```');
+  w();
+}
+
 w('---');
 w();
 w('## 三、用到的全部片段（去重后）');
 w();
-w('### 3.1 `contactOverride.proactive`（顶掉 45 格的两条）');
+w('### 3.1 `describe` —— 描述层四段（2026-10-08 新增）');
 w();
-for (const [k, v] of Object.entries(cfg.contactOverride.proactive)) w(`- **${k}**　${v}`);
-w();
-w('### 3.2 `urgencyBoost` 的 proactive 列');
-w();
-w('| 档 | connection | 文案 |');
+w('| 段 | 档位 | 文案 |');
 w('|---|---|---|');
-const URANGE = { desperate: 'c ≥ 0.50', urgent: 'c ≥ 0.35', aware: 'c ≥ 0.20', none: '< 0.20' };
-for (const [k, v] of Object.entries(cfg.urgencyBoost)) {
-  w(`| \`${k}\` | ${URANGE[k] || ''} | ${v.proactive === null ? '（无）' : v.proactive} |`);
+for (const it of cfg.describe.connection) {
+  const label = it.max === undefined ? '`connection ≥ 0.50`' : `\`< ${it.max.toFixed(2)}\``;
+  w(`| 1 连接 | ${label} | ${it.text} |`);
 }
+const PL = ['`< 0.00`', '`[0.00, 0.10)`', '`[0.10, 0.30)`', '`[0.30, 0.50)`', '`[0.50, 0.80)`', '`≥ 0.80`'];
+cfg.describe.pride.forEach((it, i) => w(`| 2 骄傲 | ${PL[i]} | ${it.text} |`));
+w(`| 3 心情 | \`v>0.3, a>0.3\` | ${cfg.describe.mood.excited} |`);
+w(`| 3 心情 | \`v<-0.3, a<-0.3\` | ${cfg.describe.mood.depressed} |`);
+w(`| 3 心情 | 其余象限 | （见 config） |`);
+w(`| 4 沉浸 | \`immersion>0.3\` 且有活动 | ${cfg.describe.immersion.doing} |`);
+w(`| 4 沉浸 | \`0.1 ≤ immersion ≤ 0.3\` | （死带，不出） |`);
+w(`| 4 沉浸 | \`immersion<0.1\` | ${cfg.describe.immersion.idle} |`);
 w();
-w('> 找她场景的 c 一定 ≥ 0.35，所以只可能用到 `urgent` 与 `desperate` 两档。');
-w('> `aware` 那条不会进主动唤醒，但会出现在此刻块里。');
+w('> 主动唤醒侧 `connection` 一定越线，所以段1 只可能取到第 3、4 档。');
+w('> 段4 的真来源是 `lib/activity.js`：冲浪 spawn 成功后登记一次活动（`search` → `immersion=0.4`）。');
+w('> 之后按 0.01/分钟自然衰减 —— 约 10 分钟后落进死带（两句都不出），约 30 分钟后回到 idle。');
+w('> 桥不替模型编活动：`lastActivity` 为空时即使 immersion 高也不出段4。');
 w();
-w('### 3.3 `sceneOverride.find_activity`');
+w('### 3.2 `urgencyBoost` —— 2026-10-08 已退役');
+w();
+w('四档全部置 null。原用途是给 45 格补一句「她多久没动静」，退役原因：与描述层第 1 段');
+w('同轴同义（同一根 `connection` 轴、同一组阈值），且在「找她」块里与 `contactOverride`');
+w('叠成三句同义反复。');
+w();
+w('> ⚠️ 是置 null 而非删键：vendor 的 `createToneGrid` 在**不传** `urgencyBoost` 时会回落到');
+w('> 内置 `DEFAULT_URGENCY`（作者文案，风格与本部署不符）。');
+w();
+w('### 3.3 `contactOverride` —— 2026-10-08 已退役（键已删除）');
+w();
+w('原用途：`connection` 过线时顶掉由 `pride` 决定的基础档。退役原因：它把**整条 45 格**');
+w('一起顶掉了（只留「基调句 + 尾注」）。原文案留档 git 历史（`de0af31` 及之前）。');
+w();
+w('### 3.4 `sceneOverride.find_activity`');
 w();
 for (const [k, v] of Object.entries(cfg.sceneOverride.find_activity)) w(`- **${k}**　${v}`);
 w();
-w('### 3.4 `proactiveOutlet`（出口说明）');
+w('### 3.5 `proactiveOutlet`（出口说明）');
 w();
 for (const [k, v] of Object.entries(cfg.proactiveOutlet)) w(`- **${k}**　${v}`);
 w();
-w('### 3.5 档位行取值表（`meaningfulLines`）');
+w('### 3.6 档位行 —— 2026-10-08 已整条删除');
 w();
-w('| 行 | 出现条件 | 取值 |');
-w('|---|---|---|');
-w('| 心情 | **恒出现** | `valence > 0.3` → 舒展 ／ `< -0.3` → 沉 ／ 否则 中性 |');
-w('| 姿态 | `pride > 0.3` 或 `pride < -0.1` | `>0.8` 完全收着 ／ `>0.5` 收着 ／ `>0.3` 留着一点余地 ／ `>-0.1` 平常 ／ `>-0.3` 松了 ／ 否则 完全不设防 |');
-w('| 心跳 | `arousal > 0.3` 或 `< -0.3` | `>0.3` 起波 ／ `< -0.3` 慵懒 |');
-w('| 想念 | `connection ≥ 0.20` | `≥0.50` 挡不住 ／ `≥0.35` 想念 ／ `≥0.20` 留意 |');
+w('原来这里是 `心情：X。姿态：X。心跳：X。想念：X。` 的四行取值表。');
+w('删除理由：四条各自 ≈ 45 格正文的某一维（心情←簇 / 姿态←pride 档 / 心跳←簇内 arousal /');
+w('想念←urgency 尾注，同轴同阈值），属同义重复；且「想念」会重字成 `想念：想念。`、');
+w('「悠闲」是永不可达的死档。');
 w();
-w('> 阈值实现在 `lib/inject-text.js` 的 `labelConnection / labelPride / labelValence / labelArousal`。');
-w('> 主动唤醒时 `connection` 一定 ≥ 0.20，所以「想念」这一行基本都会出现。');
+w('> 历史分析留档：`_test/state_lines_probe.txt` 与 `_test/compare_state_lines.txt`');
+w('> （生成脚本已随对象一并退役）。');
 w();
-w('### 3.6 尾句');
+w('### 3.7 尾句');
 w();
 w('```text');
 w(BOUNDARY_LINE);

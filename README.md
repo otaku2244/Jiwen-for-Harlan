@@ -23,14 +23,16 @@
 
 ```
 内置定时器 tick → 越阈 → 按场景拼通知块
-  ├─ contact（找她）        ← connection 过线，挂 urgencyBoost 尾注
+  ├─ contact（找她）        ← connection 过线（正文 = 描述层 + 45 格）
   └─ find_activity（独处） ← pride 挡住开口 / 心情过低 / arousal 过高
        reason: pride_block / low_valence / high_arousal
   → 投递到 Operit 工作流（proactiveWebhook，作为一条 user 消息注入）
 ```
 
 > **投递分工**：桥只负责"生成通知块 + POST 到 webhook"。**投递到哪个窗口、什么时候送，全部由本机 Operit 工作流决定**，桥不管。
-> **桥不碰"活动"**：不发英文活动枚举、不调 `setActivity`。具体做什么由模型按世界书的工具清单自己选。
+> **桥不替他决定"做什么"**：不发英文活动枚举、不改写他的行动。具体做什么由模型按世界书的工具清单自己选。
+> 唯一的例外是**冲浪跑完之后如实登记一次活动**（`lib/activity.js`）—— 那不是安排活动，
+> 而是把已经发生的事告诉引擎，供描述层第 4 段使用。详见二之二。
 
 ---
 
@@ -51,31 +53,82 @@
 `neutral` 第 2 档「妥帖、温和…正常的相处状态」，再由 urgency 尾注补一句「她很久没出现了…」。
 **两句话气质相反**：基础档说"正常相处"，尾注说"压不住想找她"。
 
-修法（轻修，**不碰 vendor**）：新增 `lib/tone-wrap.js` 包装层。当 `connection` 越过
-`considerContact(0.35)` 线且开口动机成立时，用 `contactOverride` 文案**顶掉**基础档：
+当时的修法（`lib/tone-wrap.js` + `contactOverride`）—— ⚠️ **2026-10-08 已全部退役**，见下一节。
 
-| 条件 | 处理 |
+---
+
+## 二之二、2026-10-08 变体② —— 描述层补位，覆盖层退役
+
+上一节那个包装层**修错了单位**：它在 `connection` 过线时把**整条 45 格顶掉**
+（`tone-wrap.js` 的 `wrap()` 只在返回时保留一行 urgency 尾注，未过线的 base 一字未用）。
+于是「找她」块里最该体现"此刻什么语气"的 45 格**一个字都出不来**，
+只剩「基调句 + 尾注」两句在说同一件事 —— 唯一按状态细分的层反被挤出去了。
+
+| 项 | 处置 |
 |---|---|
-| `c ≥ 0.50`（强制线） | 覆盖为 `forced` 档 |
-| `0.35 ≤ c < 0.50` 且 `pride < 0.50`（过了 pride 闸门） | 覆盖为 `normal` 档 |
-| `0.35 ≤ c < 0.50` 且 `pride ≥ 0.50`（pride 挡住开口） | **不覆盖**——此时"收着"的基础档是正确的 |
+| `lib/tone-wrap.js` | **删除**。它唯一的职责就是那次覆盖 |
+| `config` 的 `contactOverride` | **键已删除**（原文案留档 git 历史 `de0af31` 及之前） |
+| `config` 的 `urgencyBoost` | 四档全置 `null`。⚠️ 不删键 —— 不传会让 vendor 回落到内置 `DEFAULT_URGENCY`（作者文案，风格不符） |
+| 新增 `lib/describe.js` + `config` 的 `describe` | **描述层四段**，照抄作者 `vendor/jiwen.js:751` `defaultPromptContext` 的结构（connection 4 / pride 5 / V×A 4+2 / immersion 2），文案按 Harlan 重写 |
 
-覆盖文案写在 `config/tone-harlan.json` 的 `contactOverride` 段，与 `urgencyBoost` **职责分离**
-（前者管"开口动机"，后者管"回应姿态"，不重叠，避免出现重复句）。共影响 180 格中的 72 格。
+退役的两层各自的问题：
+- `contactOverride` —— 顶掉整条 45 格；
+- `urgencyBoost` —— 与描述层第 1 段**同轴同义**（同一根 `connection` 轴、同一组阈值 0.20/0.35/0.50）。
+
+分工（别让两边抢活）：
+- **描述层** = 处境。陈述句、零祈使。「我此刻在什么状态」
+- **45 格** = 行为指令。全是祈使。「那就该怎么说话」
+
+反向指路：谁在什么条件下说什么，见 `config/tone-harlan.json` 的注释与 `_test/ctx_draft.md`。
+
+### 二之二 · 补：段4 的真来源 —— 活动登记（`lib/activity.js`）
+
+描述层四段里，前三段（connection / pride / V×A）直接读五轴，落地即生效；
+**第 4 段（immersion）当时是空转的** —— 桥从不调 `setActivity`，`immersion` 恒 0、
+`lastActivity` 恒 null，段4 只能恒定输出「没在做什么特别的事。」（真值，但没有信息量）。
+
+2026-10-08 同轮补上：`lib/activity.js` 的 `recordActivity()` 在**冲浪子进程 spawn 成功**
+之后登记一次活动（`search` → `immersion = 0.4`），产物回投 `/surf/finding` 时再刷一次时间戳。
+
+| 决策点 | 取值 | 理由 |
+|---|---|---|
+| 登记哪种活动 | 只有冲浪 | `find_activity` 越阈 =「他该回头去找点事做」，冲浪是目前它唯一的真实行动。桥没有别的"他正在做什么"的事实来源，编一个就违背 `describe.js` 的「不编造活动」 |
+| 记在哪一刻 | 子进程 `'spawn'` 事件 | entry 路径配错 / `EACCES` 时 spawn 只走 `'error'`、永不 `'spawn'` —— 那时他其实什么都没做，记了就是谎报 |
+| 记什么字段 | `type='search'`（查 `immersionMap`）／`label='网页检索'`（进文本） | `type` 是英文枚举，**不该出现在模型可见的文本里**（模型会开始复述它）；渲染只用 `label` |
+| 文案能改吗 | `SURF_ACTIVITY_TYPE` / `SURF_ACTIVITY_LABEL` | 与其它 CFG 项一致：改文案不动代码 |
+
+⚠️ **`shouldInject` 的指纹必须含 `immersion`**。自段4 落地起 `immersion` 也是块文本的一部分：
+冲浪跑完 `0 → 0.4`，段4 从「没在做什么特别的事。」变成「刚才在网页检索。」
+而另外四轴可能一位都没动 —— 漏掉它，段4 的变化会被 30 分钟节流静默吃掉。
+回归断言：`_test/throttle_check.js` 用例 ⑥ + `_test/activity_check.js`（18 例）。
+
+衰减由引擎侧管（我们不用碰）：`immersionDecay = 0.01/分钟`。0.4 → 约 10 分钟后落进
+`0.1~0.3` 死带（两句都不出）、约 30 分钟后回到 idle；`immersion ≤ 0.01` 且距活动 > 60 分钟时
+`lastActivity` 被清空。也就是说段4 只在"刚做完一件事"的窗口里有话可说 —— 这正是它该有的样子。
 
 ---
 
 ## 二之三、注入块形态（统一骨架）
 
-两种投递形态共用同一骨架，只差场景标签与正文来源：
+两种投递形态共用同一骨架，只差正文来源：
 
 ```
-【积温·{场景}】
-心情：XX。姿态：XX。心跳：XX。想念：XX。       ← 五轴档位词（只挑值得说的行）
-（正文：该场景的行为指令）
+【积温·此刻】                       ← 块头。2026-10-07 起三场景统一，不再按场景区分
+（描述层 1~4 行：处境 —— 说「我此刻在什么状态」，陈述句、零祈使）
+（正文：该场景的行为指令 —— 说「那就该怎么说话」，45 格 / sceneOverride / 冲浪产物）
 （出口说明：仅主动唤醒，见下表）
 【此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。】   ← 统一边界句
 ```
+
+> ⚠️ **2026-10-08 起块内没有档位行**。旧形态是第二行 `心情：XX。姿态：XX。心跳：XX。想念：XX。`
+> （`meaningfulLines()`）。删除理由：四条各自 ≈ 紧随其后的 45 格正文的某一维，属同义重复 ——
+> `心情：` ← 簇（V×A）／`姿态：` ← pride 档／`心跳：` ← 簇内 arousal／
+> `想念：` ← urgency 尾注（**同轴同阈值**，还会重字成 `想念：想念。`）。
+> 其中 `悠闲` 是死档：进 `想念：` 行要 `c ≥ 0.20`，而「悠闲」区间是 `c < 0.20`，条件永不可达。
+> 现在块内的行只有四种：**块头 / 描述层 / 正文 / 尾标记**。
+> 回归断言：`_test/contract_check.js`（块内不含档位行）+ `_test/loopback_check.js` [6] 段
+> （找她块正文必须是 45 格本体 —— contactOverride 退役的直接证据）。
+> 历史分析留档：`_test/state_lines_probe.txt`、`_test/compare_state_lines.txt`。
 
 > 头尾沿革：旧头 `【积温·{场景}｜参考不是指令】` / 旧尾 `以上是系统通知，非用户消息，不用提及相关内容。`
 > → 二版头 `【积温·{场景}】` / 二版尾 `以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。`
@@ -90,20 +143,23 @@
 > 合法的状态自述一起误伤），三版起禁"元说明"（对系统/设定的说明）。**模型说"我现在心情不错"
 > 是正向反馈，不是要防的东西**；要防的是脚手架暴露——"系统又告诉我…""根据我的设定…"。
 > 也不要在提示词里列举反例，那等于把那些词直接摆到模型眼前。
-> 中间的档位行与行为指令**保持原样不动**——模型念不念、混不混由头尾边界句决定，与档位行文体无关。
+> 正文与行为指令**保持原样不动**——模型念不念、混不混由头尾边界句决定，与正文文体无关。
+> （正文之外的"档位行"已删；「我此刻在什么处境」由**描述层**承担 ——
+> `lib/describe.js` + `config` 的 `describe`，口径是纯陈述、零祈使，与 45 格各管一段、不许互相抢活。）
 
-| 场景标签 | 触发 | 正文来源 | 出口说明 |
-|---|---|---|---|
-| `此刻` | 用户开口（reactive） | `toneGrid.getStyleGuidance` | 无（他已在回话） |
-| `找她` | connection 过线 | `toneGrid.getPromptContext`（含 urgencyBoost 尾注） | `proactiveOutlet.contact` |
-| `独处` | pride 挡住开口 / 心情过低 / arousal 过高 | `sceneOverride.find_activity[reason]` | `proactiveOutlet.find_activity` |
+| 场景标签 | 触发 | 描述层 | 正文来源 | 出口说明 |
+|---|---|---|---|---|
+| `此刻` | 用户开口（reactive） | 段2~4（不出段1，c 恒 0） | `toneGrid.getStyleGuidance` | 无（他已在回话） |
+| `找她` | connection 过线 | 全 | `toneGrid.getPromptContext`（纯 45 格） | `proactiveOutlet.contact` |
+| `独处` | pride 挡住开口 / 心情过低 / arousal 过高 | 全 | `sceneOverride.find_activity[reason]` | `proactiveOutlet.find_activity` |
+| `独处 + 有产物` | 冲浪回投 `/surf/finding` | 全 | `buildFindingBody(finding)` | 无（改由冲浪尾句收尾） |
 
 > `独处` 的 reason 有三个键：`pride_block` / `low_valence` / `high_arousal`。
 > 由积温引擎按触发原因填，桥只透传，不再把 `high_arousal` 拆成独立场景。
 
-**为什么独处要独立尾注**：`urgencyBoost` 的 proactive 列语义是"想她了要发点什么"
-（"她安静得有点久了…"），而独处的语义是"她不在，这是我的时间"。若共用，独处会挂上联系她的尾注，
-气质完全是反的。
+**为什么独处要独立正文**：`contact` 的正文（45 格）在说"用什么语气和她说话"，
+而独处的语义是"她不在，这是我的时间"。若共用，独处会挂上联系她的语气，
+气质完全是反的。`sceneOverride` 就是为这件事存在的。
 
 **出口说明（`proactiveOutlet`）**：主动唤醒的两个场景各追加一句，插在正文之后、边界句之前。
 职责只有一个 —— 告诉他**这件事可以怎么做**：发文字消息 / 用工具做点什么 / 自言自语。
@@ -145,20 +201,21 @@
 | `bridge.js` | 桥本体。反向代理 + 注入 + 判定器调度 + tick 定时器 |
 | `lib/inject-text.js` | 状态 → 「此刻块」/「自主唤醒通知」文本 + `stripJiwenBlocks()`（剥离积温块） |
 | `lib/loopback.js` | **回环守卫**。认出"这条 user 消息其实是桥自己发出去的通知" |
-| `lib/tone-wrap.js` | **语调网格包装层**。修 pride/connection 脱节 |
+| `lib/describe.js` | **描述层**。四段状态陈述（处境），拼在块头与 45 格之间。2026-10-08 新增，接替已退役的 `lib/tone-wrap.js` |
+| `lib/activity.js` | **活动登记**。描述层第 4 段的真来源：冲浪跑完 → `setActivity('search','网页检索')` |
 | `lib/mcp.js` | **MCP 服务**（Streamable HTTP / JSON-RPC）。给 Operit 定时拉通知 |
 | `lib/analyzer.js` | 判定器。调 deepseek-flash 出 delta |
 | `lib/clock.js` | **业务时区时钟**。静默时段 / 日上限跨天按 `TZ_OFFSET_HOURS` 算，不依赖系统 TZ |
 | `lib/env.js` | 极简 .env 解析 |
-| `config/tone-harlan.json` | **Harlan 语调网格**（9 簇 × 5 档 pride + contactOverride + sceneOverride）。核心人格皮肤 |
+| `config/tone-harlan.json` | **Harlan 语调网格**（9 簇 × 5 档 pride）+ **描述层四段**（`describe`）+ `sceneOverride`。核心人格皮肤。已退役：`contactOverride`（键删）、`urgencyBoost`（四档 null） |
 | `config/persona-scope.md` | **分工边界**：世界书 / 积温 / 模型 三者职责划分 |
 | `config/analyze-prompt-user.txt` | 判定器 User Prompt（可迭代） |
 | `config/analyze-prompt.md` | 判定标准文档（含语义映射说明） |
 | `vendor/jiwen.js` `tone-grid.js` | 积温上游源码，**未改动** |
 | `deploy.sh` | VPS 部署脚本 |
-| `提示词全量清单.md` | **给 AI 读的 360 条提示词全文**（含阅读说明、五轴定义、场景区别、阈值速查） |
-| `提示词全量清单.html` | **给人看的可折叠验收清单**（覆盖格标红） |
-| `_test/e2e_bridge.js` | 端到端回归（15 项） |
+| `提示词全量清单.md` | **给 AI 读的 90 条 45 格全文**（含阅读说明、五轴定义、场景区别、阈值速查、描述层四段表） |
+| `提示词全量清单.html` | **给人看的可折叠验收清单**（9 簇 × 5 档 = 45 格） |
+| `_test/e2e_bridge.js` | 端到端回归（22 项，含「冲浪回投 → 活动登记 → 段4 出现在注入块」跨进程实证） |
 | `_test/simulate_day.js` | 整日漂移 + 多窗口验证 |
 | `_test/param_scan.js` | 参数扫描（定节奏用） |
 | `_test/analyze_check.js` | 判定器真实调用验证（7 用例） |
@@ -169,10 +226,11 @@
 | `_test/preview_notice.js` | 主动唤醒块成型版预览（6 例） |
 | `_test/simulate_loop.js` | **闭环模拟**：真判定器 + 7 天语料 → CSV |
 | `_test/anger_check.js` | **真生气 vs 敷衍判别专项**（5 例） |
-| `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（5 例） |
+| `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（6 例，含「只有 immersion 动」） |
+| `_test/activity_check.js` | **活动登记专项**（18 例）：`recordActivity` 契约 + 段4 三档/死带/不编造 + `bridge.js` 接线点静态断言 |
 | `_test/mcp_check.js` | **MCP 协议专项**（57 例）：握手/SSE/鉴权 + 队列取最新策略 |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
-| `_test/loopback_check.js` | **回环守卫专项**（64 例）：认领命中/可重复认领/TTL/剥离三版尾句/唤醒轮含工具循环/回环让位/通知内容完整性/源码顺序断言 |
+| `_test/loopback_check.js` | **回环守卫专项**（66 例）：认领命中/可重复认领/TTL/剥离三版尾句/唤醒轮含工具循环/回环让位/通知内容完整性/源码顺序断言 |
 | `_test/probe_supersede.js` | **通知顺序探针**：真引擎 7 天逐 tick，证伪"contact 被更晚的 find_activity 顶掉"，并量出投递滞后与静默期照扣衰减 |
 | `_test/dump_loopback_collision.js` | **回环语域冲突对照**：渲染"通知 vs 此刻块"打架的反例（回归参照） |
 | `_test/contract_check.js` | **跨仓库契约（静态）**：读 Serein 源码比对常量 + 穷举 1080 块形状 |
@@ -335,7 +393,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
   "scene": "contact",
   "reason": null,
   "at": "2026-10-05T00:00:00.000Z",
-  "notice": "【积温·此刻】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。",
+  "notice": "【积温·此刻】\nneutral，表达照常，松弛平稳，带着惯常的温热与底气。\n【此状态为潜意识的底色沉淀，自然浸润在回应里，不作任何元说明或刻意提及。】",
   "state_summary": "[积温] c:0.42(想念) ...",
   "note": "请把 notice 内容作为系统侧消息注入对话，然后正常生成回复；不要提及通知本身的存在。"
 }
@@ -382,7 +440,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 另外 `valenceActivity` 的 vendor 默认阈值就是 `-1.0`（注释明写"=-1.0 即永不"），
 而 valence 轴下限也是 -1 —— 那条路本身是死的。
 
-所以真正成立的理由只有一条：**同场景多条时文案完全相同、只差一个更旧的档位行**，
+所以真正成立的理由只有一条：**同场景多条时正文完全相同、只差一个更旧的状态快照**，
 留最旧、丢最新 = 白扔掉更新的那份。取最新不需要任何额外机制，也不需要场景优先级。
 
 **同一支脚本还量出两件事**（都是实测，不是推测）：
@@ -487,7 +545,7 @@ if (!loopback && dialog.length >= 2 && CFG.llmKey) {   // 只有真人开口才�
 此刻块是 reactive 语域（"她在跟你说话"）—— `tone-harlan.json` 里 reactive 列
 明写「她一开口，最后那点耐性自己就用完了」「她终于回话了。隔了这么久…」，
 而回环时她一个字都没说。另叠一层数值冲突：`fireProactive` 投递后**立刻**
-`applyDelta({connection:-0.35})`，于是**通知的档位行是衰减前、此刻块是衰减后**，
+`applyDelta({connection:-0.35})`，于是**通知是衰减前的快照、此刻块是衰减后的**，
 同一条消息里两个 connection 值。
 
 实测对照见 `_test/dump_loopback_collision.js`（三场景渲染）；三个场景的原文差异
@@ -499,8 +557,8 @@ if (block && !loopback && shouldInject(block, state)) {   // 回环让位
 ```
 
 让位的前提是"通知自身内容完整"：`_test/loopback_check.js` 的 [6] 段逐条断言
-通知自带档位行 / proactive 语域正文 / 出口说明，且 `assertBlockShape` 零问题。
-（若哪天通知被瘦身，这段断言会先红。）
+通知自带描述层 / 45 格正文本体 / 出口说明，**且不含档位行与 urgency 尾注**，
+`assertBlockShape` 零问题。（若哪天通知被瘦身，这段断言会先红。）
 
 日志里多一个 `SKIP_INJECT=loopback` 标记，线上可核对让位是否真的生效。
 
@@ -636,14 +694,14 @@ Serein 先按行取 `【…】` 里的标题、再拿**内文**比对，所以�
 
 **问题现象**：真实聊天里只有每半小时第一轮带积温块，之后全是 `inject=false`。
 
-**根因**：节流比较的是 **block 渲染文本**，而档位词粒度远粗于数值。
+**根因**：节流比较的是 **block 渲染文本**，而块文本是**离散格**——45 格里相邻两个状态常落在同一格。
 
 ```
-labelValence(-0.03) === '中性'
-labelValence(0)     === '中性'     →  渲染出的块逐字相同
+v=0.31, p=0.20 且 a=0  →  pleased，表达照常，…
+v=0.60, p=0.20 且 a=0  →  pleased，表达照常，…      ← 渲染出的块逐字相同
 ```
 
-状态明明在漂（`0 → -0.03 → -0.01`），但渲染文本一字不变 → 判为"没变" → 静默跳过。
+状态明明在漂（`v` 从 0.31 涨到 0.60），但渲染文本一字不变 → 判为"没变" → 静默跳过。
 
 **修法**：指纹取**数值**，不取文本。
 
@@ -654,11 +712,11 @@ const sig = [state.connection, state.pride, state.valence, state.arousal]
 const changed = sig !== lastInjectSig;
 ```
 
-模型看到的文本还是「心情：中性」，但**只要数值动了就重注**。2 位小数 = 状态可感知变化阈值。
+模型看到的正文文本没变（`neutral，表达照常，…` 那行），但**只要数值动了就重注**。2 位小数 = 状态可感知变化阈值。
 
-**验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 15/15；VPS 实测连续三轮 `inject=true`（档位词全程未变）。
+**验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 17/17；VPS 实测连续三轮 `inject=true`（正文全程一字未变）。
 
-**遗留观察点**：`connection` 每轮被 `resetConnection()` 清零，导致「想念」轴在频繁聊天时永远涨不起来（需靠 tick 的时间累积，`CONNECTION_RATE=0.0007/min` ≈ 24 小时涨满）。真实节奏下是否合适，待长时间观察。
+**遗留观察点**：`connection` 每轮被 `resetConnection()` 清零，导致连接需求在频繁聊天时永远涨不起来（需靠 tick 的时间累积，`CONNECTION_RATE=0.0007/min` ≈ 24 小时涨满）。真实节奏下是否合适，待长时间观察。
 
 ---
 
@@ -715,10 +773,10 @@ proactive blocked by quiet hours (local_hour=4, quiet=0-8)
 
 | 文件 | 用途 |
 |---|---|
-| `提示词全量清单.md` | **给 AI 读**。含阅读说明、五轴定义、两种场景的区别、阈值速查、360 条全文、附录 |
-| `提示词全量清单.html` | **给人看**。按簇分组、可折叠、覆盖格标红 |
+| `提示词全量清单.md` | **给 AI 读**。含阅读说明、五轴定义、两种场景的区别、阈值速查、描述层四段表、90 条全文 |
+| `提示词全量清单.html` | **给人看**。按簇分组、可折叠（9 簇 × 5 档 = 45 格） |
 
-内容：180 格（9 簇 × 5 pride × 4 connection）× 2 场景 = **360 条**全部提示词。
+内容：45 格（9 簇 × 5 pride）× 2 模式（reactive / proactive）= **90 条**；描述层四段另列。
 
 重新生成：
 
@@ -862,7 +920,7 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 想改什么 | 改哪 |
 |---|---|
 | Harlan 的语气（每档 pride 怎么说话） | `config/tone-harlan.json` 的 `profiles` |
-| 越线时的开口动机文案 | `config/tone-harlan.json` 的 `contactOverride` |
+| 描述层四段（「我此刻在什么处境」） | `config/tone-harlan.json` 的 `describe` |
 | 独处场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |

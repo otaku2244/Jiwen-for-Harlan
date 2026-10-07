@@ -17,14 +17,16 @@
 const fs = require('fs');
 const path = require('path');
 const { createToneGrid } = require('../vendor/tone-grid.js');
-const { createToneWrapper } = require('../lib/tone-wrap.js');
+const { createDescriber } = require('../lib/describe.js');
 const { buildInjectionBlock, buildProactiveNotice } = require('../lib/inject-text.js');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'tone-harlan.json'), 'utf8'));
-const grid = createToneWrapper(
-  createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost }),
-  cfg.contactOverride
-);
+const grid = createToneGrid({ profiles: cfg.profiles, urgencyBoost: cfg.urgencyBoost });
+const desc = createDescriber(cfg.describe);
+
+// 描述层是 buildXxx 新增的末位参数 —— 包一层，免得每个调用点手写。
+const bN = (st, g, opts, so, po) => buildProactiveNotice(st, g, opts, so, po, desc);
+const bI = (st, g) => buildInjectionBlock(st, g, desc);
 
 // 桥在 fireProactive 里：先用 st 渲染通知，投递后立刻 applyDelta({connection:-0.35})。
 // 所以「通知的档位行」是**衰减前**，「此刻块的档位行」是**衰减后**。
@@ -32,8 +34,8 @@ const DECAY = -0.35;
 
 function show(title, statePre) {
   const statePost = { ...statePre, connection: statePre.connection + DECAY };
-  const notice = buildProactiveNotice(statePre, grid, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
-  const block = buildInjectionBlock(statePost, grid);
+  const notice = bN(statePre, grid, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  const block = bI(statePost, grid);
 
   console.log('\n' + '='.repeat(72));
   console.log(title);
@@ -54,8 +56,8 @@ show('场景 2：刚过考虑线（c=0.38）', { connection: 0.38, pride: 0.15, 
 // 场景正文来自 sceneOverride，与此刻块的 reactive 正文不同源，看看是否也冲突。
 (function () {
   const state = { connection: 0.10, pride: 0.20, valence: -0.45, arousal: 0.05 };
-  const notice = buildProactiveNotice(state, grid, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet);
-  const block = buildInjectionBlock(state, grid);
+  const notice = bN(state, grid, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet);
+  const block = bI(state, grid);
   console.log('\n' + '='.repeat(72));
   console.log('场景 3：独处通知（low_valence），state 无衰减');
   console.log('='.repeat(72));
