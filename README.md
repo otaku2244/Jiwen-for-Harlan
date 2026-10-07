@@ -335,7 +335,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
   "scene": "contact",
   "reason": null,
   "at": "2026-10-05T00:00:00.000Z",
-  "notice": "【积温·找她】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。",
+  "notice": "【积温·此刻】\n心情：中性。\n以上是内在心绪和潜意识的自然流露，切勿对她复述或提及此状态。",
   "state_summary": "[积温] c:0.42(想念) ...",
   "note": "请把 notice 内容作为系统侧消息注入对话，然后正常生成回复；不要提及通知本身的存在。"
 }
@@ -504,7 +504,7 @@ if (block && !loopback && shouldInject(block, state)) {   // 回环让位
 
 日志里多一个 `SKIP_INJECT=loopback` 标记，线上可核对让位是否真的生效。
 
-**未采纳的备选**：让 Operit 只投一个「信封」（如 `【积温·找她】`），桥按
+**未采纳的备选**：让 Operit 只投一个「信封」（如 `【积温·此刻】`），桥按
 `loopback.scene` 用请求时刻的状态重渲染完整块。文案与投递彻底解耦，但
 `loopbackGuard` 是**进程内内存**，桥一重启那一轮就认领不到 → 唤醒丢失 +
 `resetConnection`/判定器误开，代价比收益大。
@@ -529,7 +529,15 @@ if (block && !loopback && shouldInject(block, state)) {   // 回环让位
 
 Serein 侧（fork 提交 `a5c1bdd`）在 `chat_context.py` 里加了三件事：
 
-1. `EXTERNAL_CONTEXT_BLOCK_TITLES` 增加 `积温·此刻` / `积温·找她` / `积温·独处`；
+1. `EXTERNAL_CONTEXT_BLOCK_TITLES` 增加 `积温·此刻`（原为三条，2026-10-07 已删掉
+   `积温·找她` / `积温·独处`，**且不要补回来**）：
+   ⚠️ 桥自 2026-10-07 起**只发** `积温·此刻`，白名单也**只留它一条**。
+   历史块头为什么宁可不剥离也不补 —— 剥离函数只处理**进了跳过态**的行，而
+   **出跳过态只认"下一个白名单标题行 / 尾标记行"**；一/二版旧块的尾句是**裸行**
+   （不带【】）→ 永远结束不了跳过态 → 补进白名单就是 skipping 吃到文本结尾、
+   **把她紧随的原话整段吞掉**（归档成 `''`）。不进白名单只是"不剥离"（旧块留在归档里），
+   **不毁任何正文**。两害相权取其轻。`_test/contract_check.js` 有断言守
+   "白名单积温标题恰好等于桥的产出集合"。
 2. 新增 `EXTERNAL_CONTEXT_BLOCK_END_MARKERS`；
 3. `_strip_external_context_blocks` 在「按行剥出 `【标题】`」之后、进入跳过态之前，
    先判是不是尾标记。
@@ -961,3 +969,60 @@ surf 跑完回投的产物照常发；否则 spawn 那一刻已记账，surf 回
 `require('./lib/analyzer.js')` **之后** → 这两项配置**从来没生效过**（永远走默认 20s/300s）。
 现已把 `loadEnvFile` 提到所有 lib require 之前。
 **若你此前在 `.env` 里写过这两项、却发现行为没变，就是这个原因。**
+
+---
+
+## 十·三补、块头统一为【积温·此刻】（2026-10-07）
+
+原先块头按场景分三种：`【积温·此刻】`（reactive）/ `【积温·找她】`（contact）/
+`【积温·独处】`（find_activity）。**现统一为 `【积温·此刻】`。**
+
+理由：块头不是在给"哪一种通知"编号，它是在告诉模型"这是你此刻的状态"。
+三个场景的块性质完全一样（系统侧材料），差别只该由**正文**承担 ——
+分场景写块头等于把"通知类型"这个实现细节摆到模型眼前。
+
+实现上 `SCENE_TAG` 的 key 全保留、只是三个值相同，将来要重新分场景改值即可。
+`buildProactiveNotice` 的 fallback 也从 `'自主唤醒'` 收紧成 `'此刻'` ——
+块头一旦落在 Serein 白名单之外，整块（含她紧随的原话）都会被吞进归档。
+
+**场景区分挪到了别处，都在桥外或正文里：**
+
+| 维度 | 靠什么区分 |
+|---|---|
+| 内容 | 找她走 `getPromptContext`；独处走 `sceneOverride`；有产物走 `buildFindingBody` |
+| 落点 | Operit 工作流读 MCP 返回的 `SCENE=` / `TARGET=`（`jiwen_pull.js` 的 `TARGET_OF_SCENE`），**与块头无关** |
+
+**⚠️ Serein 侧白名单只留 `积温·此刻` 一条，历史块头已删、不要补回。**
+`积温·找她` / `积温·独处` 是历史块头（10-07 之前发出去的），今天仍可能躺在 `raw_events` 里；
+但它们**不能进白名单**：旧块尾句是**裸行**（无【】），而剥离函数**出跳过态只认下一个
+白名单标题行 / 尾标记行** → 补进去会让 skipping 一路吃到文本结尾，
+**把紧随其后她的原话整段吞掉**。不补则只是"不剥离"（旧块留在归档里），不毁正文。
+`_test/contract_check.js` 有一条断言守这件事（`Serein 白名单里的积温标题恰好等于桥的产出集合`）。
+2026-10-07 归档实证：`积温·找她` **0** 条、`积温·独处` **0** 条（用户判断成立）；
+另有旧头 `积温·此刻｜参考不是指令` 17 条，同样不补。
+
+---
+
+## 十·四补、冲浪有**两条**投递通道，其中一条从不回桥（2026-10-07 复核）
+
+线上 `find_activity` 打开后，产物本该由 `POST /surf/finding` 回投桥。实测发现实际有两条：
+
+| 通道 | 谁在跑 | 传的 env | 投递去向 | 线上跑过吗 |
+|---|---|---|---|---|
+| 桥 `spawnSurf()` | `bridge.js`，`find_activity` 越阈时 spawn 一次 | 强制 `DELIVERY_CHANNEL=jiwen` + `AUTO_SCHEDULE=false` + `--once` | `POST /surf/finding` → 桥拼块 → 入队 | **0 次**（`bridge.log` 里 `surf spawning` 一条都没有） |
+| `web-surf.service` | systemd 常驻（`ExecStart=/usr/bin/node dist/index.js`，无 `--once`，`Restart=always`） | 由进程**启动时**读到的 `.env` 决定 | `DELIVERY_CHANNEL=console` → 只写 `data/surf.log` | 在跑（今天 13:17 还出了一条） |
+
+关键点：
+
+- `config.ts` 的 `loadDotEnv()` **只在 `process.env[key] === undefined` 时赋值** ——
+  所以桥 spawn 时传的 `DELIVERY_CHANNEL=jiwen` 一定压得住 `.env` 里的同项。桥那条路是通的。
+- 常驻服务的启动横幅写着 `-> console`（`data/surf.log` 前两行），说明它启动那刻
+  读到的就是 console；`.env` 后来改成 `jiwen` 但**服务没重启**，进程内仍是 console。
+  → 它每 6~12 小时自己跑一次、烧一次模型钱，产物**只落在日志里，永远到不了模型**。
+- 10-06 15:17:06 那条 `surf finding received` 是一次**手动**回投（当时桥刚重启 42 秒，
+  不可能是它自己 spawn 出来的），不是常驻服务投的。
+
+**处置建议**：`systemctl disable --now web-surf.service`。
+⚠️ 不要只 `restart` —— `.env` 里 `AUTO_SCHEDULE=false`，重启后进程会立刻退出，
+而 unit 写着 `Restart=always` + `RestartSec=30`，会变成每 30 秒重启一次的死循环。
+今后 surf 只由桥按需 spawn。

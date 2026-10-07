@@ -12,7 +12,11 @@
      可以降级成裸行放块内，**不必**和出口句合并成一句。
 
 END_MARKERS 登两条 = 有产物用 surf 尾句、没产物用原边界句，两种块各成各的对，
-不是二选一。原来的独处路径不受影响。
+不是二选一。
+
+⚠️ 2026-10-07 起块头统一：TITLES 里的积温条目**只剩 `积温·此刻` 一条**
+（`积温·找她` / `积温·独处` 已删，且**不得补回** —— 见用例 F 的反证）。
+所有用例的块头都改成了 `【积温·此刻】`，只有 F 特意留着旧块头当反证。
 """
 import re
 
@@ -23,7 +27,7 @@ EXTERNAL_CONTEXT_BLOCK_TITLES = {
     "相关记忆", "工作区", "工作区结构", "工具结果", "工具返回",
     "关系天气", "照顾备忘", "照顾提醒", "屏幕文本",
     "Persona", "Recent Context", "Relationship Weather", "Care Memo", "Care Reminder",
-    "积温·此刻", "积温·找她", "积温·独处",
+    "积温·此刻",
 }
 
 EXTERNAL_CONTEXT_BLOCK_END_MARKERS = {
@@ -93,17 +97,17 @@ def report(name, text, expect=HER_WORDS, note=""):
 print("### 第 1 轮：END_MARKERS = 现状（只有原边界句）\n")
 
 report("A原样 / 内层小标题带【】/ 末行=原边界句",
-       "\n".join(["【积温·独处】", STATE_LINES, "【之前独处冲浪时发现的东西】：",
+       "\n".join(["【积温·此刻】", STATE_LINES, "【之前独处冲浪时发现的东西】：",
                   FINDING_BODY, BOUNDARY_LINE, HER_WORDS]),
        note="用户草稿原样。内层【】提前出块 → 产物全泄漏。")
 
 report("A去括号 / 内层裸行 / 末行=原边界句",
-       "\n".join(["【积温·独处】", STATE_LINES, "之前独处冲浪时发现的东西：",
+       "\n".join(["【积温·此刻】", STATE_LINES, "之前独处冲浪时发现的东西：",
                   FINDING_BODY, BOUNDARY_LINE, HER_WORDS]),
        note="只去掉内层【】，末行沿用原边界句。")
 
 report("B用户方案 / 内层裸行 / 末行=用户原话（尾句还没登记）",
-       "\n".join(["【积温·独处】", STATE_LINES, "之前独处冲浪时发现的东西：",
+       "\n".join(["【积温·此刻】", STATE_LINES, "之前独处冲浪时发现的东西：",
                   FINDING_BODY, SURF_TAIL_LINE, HER_WORDS]),
        note="末句换成用户原话，但 END_MARKERS 里还没有它 → 末句漏出去。")
 
@@ -112,7 +116,7 @@ print("### 第 2 轮：END_MARKERS 登记两条（用户原话进去）\n")
 EXTERNAL_CONTEXT_BLOCK_END_MARKERS.add(SURF_TAIL_INNER)
 
 P_SURF = "\n".join([
-    "【积温·独处】",
+    "【积温·此刻】",
     STATE_LINES,
     "之前独处冲浪时发现的东西：",
     FINDING_BODY,
@@ -127,28 +131,47 @@ report("D同C但压成单行", re.sub(r"\r?\n+", " ", P_SURF), expect="",
        note="jiwen_pull 若真的压行 → 整块被吞，她的话也没了。")
 
 report("E无产物（积温原路径，末行=原边界句）",
-       "\n".join(["【积温·独处】", STATE_LINES,
+       "\n".join(["【积温·此刻】", STATE_LINES,
                   "没有被谁占着的这段时间。做你想做的事就好，不必主动开口。",
                   "你可以调用工具做点什么，也可以只是自言自语。做什么，你自己决定。",
                   BOUNDARY_LINE, HER_WORDS]),
        note="确认多登一条没把原来的独处路径带坏。")
 
-report("F找她（contact 场景，交叉验证）",
+report("F旧块头（2026-10-07 已移出白名单）",
        "\n".join(["【积温·找她】", STATE_LINES, "正文。", BOUNDARY_LINE, HER_WORDS]),
-       note="另一个场景，确认登记集合变大不影响。")
+       expect="\n".join(["【积温·找她】", STATE_LINES, "正文。", HER_WORDS]),
+       note="⚠️ 旧块头不在白名单 = 不进跳过态 = **不剥离**：整块含她的话都留着，"
+            "只有不带块头的尾标记行照旧被单独丢弃。"
+            "**补进白名单反而是灾难** —— 见下面「反证」。")
 
-report("G此刻块（reactive，量最大的路径）",
+report("G此刻块（块头统一后唯一的路径）",
        "\n".join(["【积温·此刻】", STATE_LINES, "正文。", BOUNDARY_LINE, HER_WORDS]),
-       note="同上。")
+       note="白名单只留它一条。三个场景的块现在长得一样。")
 
 report("H失败兜底（跑空，仍带 surf 尾句）",
-       "\n".join(["【积温·独处】", STATE_LINES, "刚才想去翻点东西，没翻成。",
+       "\n".join(["【积温·此刻】", STATE_LINES, "刚才想去翻点东西，没翻成。",
                   SURF_TAIL_LINE, HER_WORDS]),
        note="失败也有出口句：告诉他可以不呈现，不至于卡住。")
 
 report("I只有块头没有尾句（残块，最坏情况）",
-       "\n".join(["【积温·独处】", STATE_LINES, "正文。", HER_WORDS]),
+       "\n".join(["【积温·此刻】", STATE_LINES, "正文。", HER_WORDS]),
        note="网关/截断导致尾句丢失 → 跳过态持续到她的话。她的原话整段被吞。")
+
+# ══ 反证：把旧块头补回白名单会怎样（真实旧块形状 = 裸行尾句）══════════════
+print("### 反证：旧块头补回白名单的后果（一/二版真实形状：裸行尾句）\n")
+LEGACY_BLOCK = "\n".join([
+    "【积温·找她】",
+    STATE_LINES,
+    "正文。",
+    "以上是系统通知，供你参考，不要在回应里提及。",  # 一/二版尾句：裸行，不带【】
+    HER_WORDS,
+])
+print("  不补（现网）：", repr(strip_blocks(LEGACY_BLOCK)))
+EXTERNAL_CONTEXT_BLOCK_TITLES.add("积温·找她")
+print("  补进去     ：", repr(strip_blocks(LEGACY_BLOCK)))
+EXTERNAL_CONTEXT_BLOCK_TITLES.discard("积温·找她")
+print("  ⚠️ 补进去后 skipping 一路吃到文本结尾，她的原话整段没了 —— 这就是不补的理由。")
+print("     不进白名单只是不剥离：块本身留在归档里，但不会毁掉任何正文。\n")
 
 # ══ 汇总 ═══════════════════════════════════════════════════════════════
 print("=" * 68)

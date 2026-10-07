@@ -153,8 +153,8 @@ const allBlocks = [];
     blank.length === 0, blank.slice(0, 3).map((x) => x[0]));
 
   const heads = new Set(allBlocks.map(([, b]) => b.split('\n')[0]));
-  check('块头都在已知场景集内',
-    [...heads].every((h) => /^【积温·(此刻|找她|独处)】$/.test(h)), [...heads]);
+  check('块头统一为【积温·此刻】（2026-10-07 起不再按场景区分）',
+    [...heads].every((h) => /^【积温·此刻】$/.test(h)), [...heads]);
 }
 
 // ════════════════════════════════════════════════════
@@ -300,9 +300,15 @@ console.log('\n[5] 跨仓库常量一致性（读 Serein 源码）');
       check('桥的所有场景块头都在 Serein 白名单内（' + needTitles.join(' / ') + '）',
         missing.length === 0, missing);
 
-      // ③ 反向：白名单里的积温标题，桥这边也要认得（否则是历史遗留，不算错，只提示）
+      // ③ 反向：白名单里的积温标题必须**恰好等于**桥的产出集合（不多不少）。
+      //    ⚠️ 2026-10-07 起桥只产 `积温·此刻`，白名单也只留它一条。
+      //       历史块头 `积温·找她` / `积温·独处` **已删且不得补回**：
+      //       旧块的尾句是无【】的裸行，进跳过态后永远出不来 →
+      //       补进白名单会让跳过态吃到结尾，把**她紧随的原话整段吞掉**（归档成 ''）。
+      //       不进白名单只是不剥离（旧块留在归档里），不毁正文。两害相权取其轻。
       const extra = [...titles].filter((t) => t.startsWith('积温·') && !needTitles.includes(t));
-      if (extra.length) console.log('  提示  白名单里还有桥当前不产出的积温标题：' + extra.join(' / '));
+      check('Serein 白名单里的积温标题恰好等于桥的产出集合（多一条就得评估是否吞正文）',
+        extra.length === 0, { 白名单多出: extra, 桥产出: needTitles });
     }
 
     // ④ Serein 的实现细节仍在：END_MARKERS 分支必须在 `if title:` 之后、进跳过态之前
