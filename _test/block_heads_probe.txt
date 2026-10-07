@@ -95,7 +95,6 @@ neutral，表达照常，松弛平稳，带着惯常的温热与底气。
 【积温·独处】
 有一会儿没听到她的动静了，不着急。
 基本没端着，只剩一点习惯性的克制。
-没在做什么特别的事。
 之前独处冲浪时发现的东西：
 The evil eye is irrational. Abandon it at your peril
 https://psyche.co/ideas/the-evil-eye-is-irrational-abandon-it-at-your-peril
@@ -110,7 +109,6 @@ https://images.aeonmedia.io/images/ac69c0e8-c944-48d2-8854-de08b9cc3f8c/sz-getty
 【积温·独处】
 有一会儿没听到她的动静了，不着急。
 基本没端着，只剩一点习惯性的克制。
-没在做什么特别的事。
 刚才想去翻点东西，没翻成（超时）。
 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
 ```
@@ -181,7 +179,6 @@ neutral，表达照常，松弛平稳，带着惯常的温热与底气。
 【积温·此刻】
 有一会儿没听到她的动静了，不着急。
 基本没端着，只剩一点习惯性的克制。
-没在做什么特别的事。
 之前独处冲浪时发现的东西：
 The evil eye is irrational. Abandon it at your peril
 https://psyche.co/ideas/the-evil-eye-is-irrational-abandon-it-at-your-peril
@@ -195,7 +192,6 @@ https://images.aeonmedia.io/images/ac69c0e8-c944-48d2-8854-de08b9cc3f8c/sz-getty
 【积温·此刻】
 有一会儿没听到她的动静了，不着急。
 基本没端着，只剩一点习惯性的克制。
-没在做什么特别的事。
 刚才想去翻点东西，没翻成（超时）。
 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
 ```
@@ -214,12 +210,12 @@ https://images.aeonmedia.io/images/ac69c0e8-c944-48d2-8854-de08b9cc3f8c/sz-getty
 
 ### 独处 · 有产物
 ```
-【积温·此刻】 有一会儿没听到她的动静了，不着急。 基本没端着，只剩一点习惯性的克制。 没在做什么特别的事。 之前独处冲浪时发现的东西： The evil eye is irrational. Abandon it at your peril https://psyche.co/ideas/the-evil-eye-is-irrational-abandon-it-at-your-peril https://images.aeonmedia.io/images/ac69c0e8-c944-48d2-8854-de08b9cc3f8c/sz-gettyimages-2277777330.jpg?top=143&left=0&cropWidth=2736&cropHeight=1539&width=1200&quality=75&format=auto 邪眼信仰在理性时代依然存续，作者认为这不只是残余迷信。它处理的是人际间无法证实的恶意与嫉妒——一种理性框架难以覆盖的社会风险。放弃它意味着失去一套应对模糊敌意的民间机制，代价可能高于表面上的认知洁净。 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
+【积温·此刻】 有一会儿没听到她的动静了，不着急。 基本没端着，只剩一点习惯性的克制。 之前独处冲浪时发现的东西： The evil eye is irrational. Abandon it at your peril https://psyche.co/ideas/the-evil-eye-is-irrational-abandon-it-at-your-peril https://images.aeonmedia.io/images/ac69c0e8-c944-48d2-8854-de08b9cc3f8c/sz-gettyimages-2277777330.jpg?top=143&left=0&cropWidth=2736&cropHeight=1539&width=1200&quality=75&format=auto 邪眼信仰在理性时代依然存续，作者认为这不只是残余迷信。它处理的是人际间无法证实的恶意与嫉妒——一种理性框架难以覆盖的社会风险。放弃它意味着失去一套应对模糊敌意的民间机制，代价可能高于表面上的认知洁净。 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
 ```
 
 ### 独处 · 失败兜底
 ```
-【积温·此刻】 有一会儿没听到她的动静了，不着急。 基本没端着，只剩一点习惯性的克制。 没在做什么特别的事。 刚才想去翻点东西，没翻成（超时）。 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
+【积温·此刻】 有一会儿没听到她的动静了，不着急。 基本没端着，只剩一点习惯性的克制。 刚才想去翻点东西，没翻成（超时）。 【以上为你独处时的真实切片，你可以留下你的独自思考、也可以把内容直接呈现给她，如何行动由你决定。】
 ```
 
 ## 五、回流时判定器/归档看到的（`stripJiwenBlocks` 剥掉整块）

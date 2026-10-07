@@ -108,6 +108,40 @@ const SURF_LABEL_DEFAULT = '网页检索';
 
   console.log('\n' + blk.split('\n').map((l) => '  | ' + l).join('\n'));
 
+  // ══════════ C2. 有产物时段4 停用（2026-10-08 用户指出重复）══════════
+  console.log('\nC2. 有产物时段4 停用\n');
+
+  const FINDING = {
+    title: 'Attention Is All You Need',
+    url: 'https://arxiv.org/abs/1706.03762',
+    note: '把注意力机制从循环结构里拆出来单独用，序列建模不再依赖逐步递归。',
+  };
+  const withF = buildProactiveNotice(stBusy, toneGrid,
+    { scene: 'find_activity', reason: 'surf', finding: FINDING },
+    cfg.sceneOverride, cfg.proactiveOutlet, desc);
+  const failBlock = buildProactiveNotice(stBusy, toneGrid,
+    { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' },
+    cfg.sceneOverride, cfg.proactiveOutlet, desc);
+  const noFBlock = buildProactiveNotice(stBusy, toneGrid,
+    { scene: 'find_activity', reason: 'pride_block' },
+    cfg.sceneOverride, cfg.proactiveOutlet, desc);
+
+  const DOING_LINE = DOING;   // 复用 B 段的 doing 句（同一次 replace）
+  check('有产物的块：段4「刚才在网页检索。」不再出现（产物头已交代同一次冲浪）',
+    !withF.includes(DOING_LINE), withF.split('\n').slice(1, 5).join(' / '));
+  check('有产物的块：产物头仍在（段4 去、产物留 —— 留的那份带结果）',
+    withF.includes('之前独处冲浪时发现的东西：') && withF.includes(FINDING.title));
+  check('有产物的块：段1~3 仍在（处境与产物不重叠，不该一起被砍）',
+    desc(stBusy, { withConnection: true }).length ===
+    desc(stBusy, { withConnection: true, withImmersion: false }).length + 1 &&
+    withF.includes(desc(stBusy, { withConnection: true })[0]));
+  check('冲浪失败分支同样关段4（否则「没翻成」与「刚才在检索」自相矛盾）',
+    !failBlock.includes(DOING_LINE), failBlock.split('\n').slice(1, 4).join(' / '));
+  check('无产物的独处块：段4 照常出（「他手头在忙什么」这一层没被砍掉）',
+    noFBlock.includes(DOING_LINE), noFBlock.split('\n').slice(1, 5).join(' / '));
+
+  console.log('\n' + withF.split('\n').map((l) => '  | ' + l).join('\n'));
+
   // ══════════ D. 接线层（静态，不跑进程）══════════
   console.log('\nD. bridge.js 接线点\n');
 

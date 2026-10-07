@@ -80,7 +80,7 @@
 
 反向指路：谁在什么条件下说什么，见 `config/tone-harlan.json` 的注释与 `_test/ctx_draft.md`。
 
-### 二之二 · 补：段4 的真来源 —— 活动登记（`lib/activity.js`）
+### 二之二 · 补一：段4 的真来源 —— 活动登记（`lib/activity.js`）
 
 描述层四段里，前三段（connection / pride / V×A）直接读五轴，落地即生效；
 **第 4 段（immersion）当时是空转的** —— 桥从不调 `setActivity`，`immersion` 恒 0、
@@ -105,7 +105,39 @@
 `0.1~0.3` 死带（两句都不出）、约 30 分钟后回到 idle；`immersion ≤ 0.01` 且距活动 > 60 分钟时
 `lastActivity` 被清空。也就是说段4 只在"刚做完一件事"的窗口里有话可说 —— 这正是它该有的样子。
 
-### 二之二 · 补二：撤掉 `resetConnection()` —— connection 交回判定器（2026-10-08）
+### 二之二 · 补二：有产物时关掉段4（2026-10-08 用户指出重复）
+
+「独处 + 有冲浪产物」的块曾经长这样（段4 与产物头并排）：
+
+```text
+【积温·此刻】
+她好一阵子没说话了。心思自己飘了过去。
+留了点余地，开口不是不行。
+刚才在网页检索。              ← 段4，label 来自 SURF_ACTIVITY_LABEL
+之前独处冲浪时发现的东西：      ← 产物头
+Attention Is All You Need
+https://arxiv.org/abs/1706.03762
+把注意力机制从循环结构里拆出来单独用，序列建模不再依赖逐步递归。
+【以上为你独处时的真实切片，…】
+```
+
+第 4 行与第 5 行是**同一次冲浪的两种说法**：段4 的 `label`（「网页检索」）就是
+`SURF_ACTIVITY_LABEL`，产物头说的「独处冲浪」是同一个动作。并列 = 同一件事说两遍。
+
+处置：`buildProactiveNotice` 的**有产物分支**传 `withImmersion: false`。
+
+| 项 | 处置 | 理由 |
+|---|---|---|
+| 产物（头 + 标题/网址/摘要） | **留** | 它带了结果 |
+| 段4（`doing` 句） | **去** | 它只重复了动作 |
+| 段4（冲浪**失败**那一支） | 同样去 | 「刚才想去翻点东西，没翻成。」与「刚才在网页检索。」并列自相矛盾 |
+| 段1~3（connection / pride / V×A） | 留 | 处境，与产物不重叠 |
+
+⚠️ **只在这一支关。** 段4 的 idle 句（「没在做什么特别的事。」）与 reactive 此刻块里的
+doing 句（她开口时，他知道自己刚做完一件事）都还有用 —— 别全局删 `describe.immersion`。
+回归断言：`_test/activity_check.js` 的 C2 段（5 例）。
+
+### 二之二 · 补三：撤掉 `resetConnection()` —— connection 交回判定器（2026-10-08）
 
 桥原先在**每轮真人开口**时调 `jiwen.resetConnection()`，它把 `state.connection` 直接写成 0。
 两处损害：
@@ -259,7 +291,7 @@ vendor/jiwen.js:277   // 连接需求降幅现由外部 LLM 分析（如 analyze
 | `deploy.sh` | VPS 部署脚本 |
 | `提示词全量清单.md` | **给 AI 读的 90 条 45 格全文**（含阅读说明、五轴定义、场景区别、阈值速查、描述层四段表） |
 | `提示词全量清单.html` | **给人看的可折叠验收清单**（9 簇 × 5 档 = 45 格） |
-| `_test/e2e_bridge.js` | 端到端回归（22 项，含「冲浪回投 → 活动登记 → 段4 出现在注入块」跨进程实证） |
+| `_test/e2e_bridge.js` | 端到端回归（25 项，含「冲浪回投 → 活动登记 → 段4 出现在注入块」跨进程实证） |
 | `_test/simulate_day.js` | 整日漂移 + 多窗口验证 |
 | `_test/param_scan.js` | 参数扫描（定节奏用） |
 | `_test/analyze_check.js` | 判定器真实调用验证（7 用例） |
@@ -271,7 +303,7 @@ vendor/jiwen.js:277   // 连接需求降幅现由外部 LLM 分析（如 analyze
 | `_test/simulate_loop.js` | **闭环模拟**：真判定器 + 7 天语料 → CSV |
 | `_test/anger_check.js` | **真生气 vs 敷衍判别专项**（5 例） |
 | `_test/throttle_check.js` | **注入节流专项**：数值微变是否重注（6 例，含「只有 immersion 动」） |
-| `_test/activity_check.js` | **活动登记专项**（18 例）：`recordActivity` 契约 + 段4 三档/死带/不编造 + `bridge.js` 接线点静态断言 |
+| `_test/activity_check.js` | **活动登记专项**（23 例）：`recordActivity` 契约 + 段4 三档/死带/不编造 + 有产物时关段4 + `bridge.js` 接线点静态断言 |
 | `_test/mcp_check.js` | **MCP 协议专项**（57 例）：握手/SSE/鉴权 + 队列取最新策略 |
 | `_test/quiet_hours_check.js` | **业务时区专项**：静默时段 / 日上限跨天（25 例） |
 | `_test/loopback_check.js` | **回环守卫专项**（66 例）：认领命中/可重复认领/TTL/剥离三版尾句/唤醒轮含工具循环/回环让位/通知内容完整性/源码顺序断言 |
@@ -762,7 +794,7 @@ const changed = sig !== lastInjectSig;
 **验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 17/17；VPS 实测连续三轮 `inject=true`（正文全程一字未变）。
 
 **观察点（2026-10-08 更新）**：原先 `connection` 每轮被 `resetConnection()` 清零，
-连接需求在频繁聊天时永远涨不起来。**reset 已撤**（见「二之二 · 补二」），
+连接需求在频繁聊天时永远涨不起来。**reset 已撤**（见「二之二 · 补三」），
 现在由判定器 delta + tick 漂移共同驱动 —— 她敷衍能推高 c、她热情能压低 c。
 真实节奏下 c 收敛到什么水平、会不会偏敏，待长时间观察。
 
@@ -951,7 +983,7 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 原因：积温 connection 范围 0~1、delta 上限 -0.5，当时桥每轮已自动 `resetConnection()`，
 判定器再给负值是重复扣减。
 （2026-10-08 更新：`resetConnection` 已撤 —— 它连"她开口但敷衍"一起抹掉了，
-见「二之二 · 补二」。现在 connection 交回判定器，兜底只在判定失败时补。）
+见「二之二 · 补三」。现在 connection 交回判定器，兜底只在判定失败时补。）
 
 ### 8.2 自主唤醒的投递 —— 已定：走 MCP 队列 ✅
 
