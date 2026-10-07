@@ -159,7 +159,7 @@ hr('[6] 作者四段描述层 —— 逐段可达性');
   console.log(`  ③ 段3 心情（作者第 3 段 V×A）                    可达 ${seenMood.size}/${moodAll.size}，缺 ${miss(moodAll, seenMood)}`);
 
   // 段4 不吃 v/a/p/c 的穷举（它只读 immersion + lastActivity），单独测三档。
-  const LABEL = '网页检索';
+  const LABEL = '上网冲浪';
   const ACT = { type: 'search', label: LABEL, at: new Date().toISOString() };
   const DOING = String(R.immersion.doing).replace('{label}', LABEL);
   const IDLE = R.immersion.idle;

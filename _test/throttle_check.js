@@ -22,7 +22,7 @@ const bI = (st, g) => buildInjectionBlock(st, g, desc);
 
 // ── 与 bridge.js 中 shouldInject 相同的实现（同步维护）──
 // ⚠️ 五个轴都要在：immersion 自 2026-10-08 起也是块文本的一部分（描述层段4 读它），
-//    漏掉它 = 冲浪跑完、段4 该从「没在做什么特别的事。」变成「刚才在网页检索。」
+//    漏掉它 = 冲浪跑完、段4 该从「没在做什么特别的事。」变成「刚才在上网冲浪。」
 //    却被节流静默吃掉。用例 ⑥ 就是钉这一条。
 const THROTTLE_MS = 1800 * 1000;
 let lastInjectSig = null;
@@ -43,7 +43,7 @@ function shouldInject(block, state) {
   return false;
 }
 
-const ACT = { type: 'search', label: '网页检索', at: new Date().toISOString() };
+const ACT = { type: 'search', label: '上网冲浪', at: new Date().toISOString() };
 
 const CASES = [
   {

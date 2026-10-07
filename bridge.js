@@ -110,8 +110,14 @@ const CFG = {
   // `type` 决定 immersion 取多少（vendor 的 immersionMap：search = 0.4），
   // `label` 是**唯一会进模型可见文本**的那一项（lib/describe.js 的 `{label}`）。
   // 所以 label 写中文短语、type 写引擎认得的英文枚举，两者别混。
+  //
+  // ⚠️ label 说的是**动作**，措辞要跟 `lib/inject-text.js` 的 FINDING_HEAD（结果）
+  //    错开维度：「上网冲浪」（动作）→「搜到了一条有意思的内容：」（结果）。
+  //    label 建的是"那个部署在做的事" —— 当前 find_activity 唯一的真实行动就是
+  //    VPS 上的 `proactive-web-surf-agent`（`CFG.surfDir`）。将来接了别的
+  //    action/接口，各自用自己的 label 与自己的产物头，别回头改描述层。
   surfActivityType: process.env.SURF_ACTIVITY_TYPE || 'search',
-  surfActivityLabel: process.env.SURF_ACTIVITY_LABEL || '网页检索',
+  surfActivityLabel: process.env.SURF_ACTIVITY_LABEL || '上网冲浪',
 };
 
 // ── 时间（业务时区）──────────────────────────────
@@ -272,7 +278,7 @@ const jiwen = createJiwen({
 //
 // ⚠️ `immersion` 必须在内。自 2026-10-08 起它也是**块文本的一部分**
 //    （描述层段4 读它）：冲浪跑完 → immersion 0.4，段4 从「没在做什么特别的事。」
-//    变成「刚才在网页检索。」，而另外四轴可能一个数都没动。
+//    变成「刚才在上网冲浪。」，而另外四轴可能一个数都没动。
 //    漏掉它 = 段4 的变化被节流吃掉，模型只看到旧那句。
 let lastInjectSig = null;
 let lastInjectAt = 0;
@@ -448,13 +454,16 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
       }
       try {
         const ok = payload.ok !== false;
+        // 失败句只交代**结果**，不说动作 —— 动作由描述层段4（「刚才在上网冲浪。」）承担。
+        // 旧写法「刚才想去翻点东西，没翻成（…）。」与段4 撞了两处：都带"刚才"、
+        // 且"想去"（打算）与"在上网"（正在做）自相矛盾。
         const failure = ok ? null
-          : ('刚才想去翻点东西，没翻成（' + String(payload.error || '原因不明').slice(0, 120) + '）。');
+          : ('没翻出什么合适的（' + String(payload.error || '原因不明').slice(0, 120) + '）。');
         const finding = ok ? {
           title: payload.title, url: payload.url, image: payload.image, note: payload.note,
         } : null;
-        // 冲浪刚跑完 → 刷新活动时间戳，让段4 说的是「刚才在网页检索。」
-        // 而不是"半小时前"。失败分支照样记：他确实去翻了，只是没翻到东西。
+        // 冲浪刚跑完 → 刷新活动时间戳，让段4 说的是「刚才在上网冲浪。」
+        // 而不是"半小时前"。失败分支照样记：他确实去冲了，只是没翻到东西。
         await recordActivity(jiwen, {
           type: CFG.surfActivityType, label: CFG.surfActivityLabel,
         }, log);
@@ -725,7 +734,7 @@ function inQuietHours() {
 // surf 自己也失败时（进程崩、超时）什么都不回 —— 由这里打印兜底日志。
 //
 // 副作用：子进程 'spawn' 成功后登记一次活动（immersion = 0.4），
-// 描述层段4 因此才有「刚才在网页检索。」可讲。见 lib/activity.js。
+// 描述层段4 因此才有「刚才在上网冲浪。」可讲。见 lib/activity.js。
 let surfInFlight = false;
 function spawnSurf(reason) {
   if (surfInFlight) { log('INFO', 'surf already in flight, skip'); return; }

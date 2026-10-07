@@ -123,15 +123,15 @@ for (const [reason, st] of [
 w('### 独处 + 有冲浪产物');
 w();
 w('正文换成产物切片，出口说明与 sceneOverride 正文都停用，尾句换成 `SURF_TAIL_LINE`。');
-w('描述层 1~3 段保留，**段4 关掉**：段4 说的「刚才在网页检索。」与产物头');
-w('「之前独处冲浪时发现的东西：」是同一次冲浪的两种说法（label 就来自 `SURF_ACTIVITY_LABEL`），');
-w('并列 = 同一件事说两遍。留产物（带结果）、去段4（只重复动作）。');
+w('描述层整段保留：段4 说**动作**（「刚才在上网冲浪。」），产物头说**结果**');
+w('（「搜到了一条有意思的内容：」）—— 两句维度不同，是"他干了什么 → 摸到了什么"的顺承。');
+w('⚠️ 别为了"防重复"在描述层加场景开关（加过一次，已撤）：重复是文案层的事。');
 w();
 {
   const st = {
     connection: 0.42, pride: 0.65, valence: -0.05, arousal: 0.05,
     immersion: 0.40,
-    lastActivity: { type: 'search', label: '网页检索', at: new Date().toISOString() },
+    lastActivity: { type: 'search', label: '上网冲浪', at: new Date().toISOString() },
   };
   w('```text');
   w(buildProactiveNotice(st, tg, {

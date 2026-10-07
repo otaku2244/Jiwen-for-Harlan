@@ -49,7 +49,7 @@ const CASES = [
   ['独处 · low_valence（无产物）', () => bN(S({ valence: -0.55, arousal: 0.1 }), tg, { scene: 'find_activity', reason: 'low_valence' }, cfg.sceneOverride, cfg.proactiveOutlet)],
   ['独处 · high_arousal（无产物）', () => bN(S({ arousal: 0.65 }), tg, { scene: 'find_activity', reason: 'high_arousal' }, cfg.sceneOverride, cfg.proactiveOutlet)],
   ['独处 · surf 有产物（昨天线上那条）', () => bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet)],
-  ['独处 · surf 失败兜底', () => bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet)],
+  ['独处 · surf 失败兜底', () => bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '没翻出什么合适的（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet)],
 ];
 
 // 模拟手机侧搬运脚本的压平（jiwen_pull.js: notice.replace(/\r?\n+/g,' ')）
@@ -125,7 +125,7 @@ w('## 三、find_activity 的三条路径，文案长什么样');
 w('');
 const noFinding = bN(S({ connection: 0.40, pride: 0.60 }), tg, { scene: 'find_activity', reason: 'pride_block' }, cfg.sceneOverride, cfg.proactiveOutlet);
 const withFinding = bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', finding: REAL_FINDING }, cfg.sceneOverride, cfg.proactiveOutlet);
-const failed = bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet);
+const failed = bN(S({ connection: 0.23 }), tg, { scene: 'find_activity', reason: 'surf', failure: '没翻出什么合适的（超时）。' }, cfg.sceneOverride, cfg.proactiveOutlet);
 const contactBlk = bN(S({ connection: 0.42, pride: 0.15 }), tg, { scene: 'contact' }, cfg.sceneOverride, cfg.proactiveOutlet);
 
 const table = [

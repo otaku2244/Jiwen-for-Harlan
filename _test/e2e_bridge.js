@@ -258,8 +258,8 @@ function check(name, cond, detail) {
   });
   await wait(300);
   const lastMsg3 = upstreamReceived && upstreamReceived.body.messages[3];
-  check('注入块里出现段4 的「刚才在网页检索。」',
-    lastMsg3 && lastMsg3.content.includes('刚才在网页检索。'),
+  check('注入块里出现段4 的「刚才在上网冲浪。」',
+    lastMsg3 && lastMsg3.content.includes('刚才在上网冲浪。'),
     lastMsg3 ? (lastMsg3.content.split('\n').find((l) => /刚才在|没在做什么/.test(l)) || '(无段4)') : 'null');
   check('注入块里没有把英文 type 写进文本', lastMsg3 && !lastMsg3.content.includes('search'));
 
@@ -269,7 +269,7 @@ function check(name, cond, detail) {
   check('活动已登记进引擎并落盘（immersion = 0.40）', Math.abs(st2.immersion - 0.4) < 1e-9,
     'immersion=' + st2.immersion);
   check('lastActivity 记的是中文 label / 英文 type',
-    st2.lastActivity && st2.lastActivity.label === '网页检索' && st2.lastActivity.type === 'search',
+    st2.lastActivity && st2.lastActivity.label === '上网冲浪' && st2.lastActivity.type === 'search',
     JSON.stringify(st2.lastActivity));
 
   child.kill('SIGTERM');

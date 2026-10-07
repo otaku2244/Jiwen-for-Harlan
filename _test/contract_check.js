@@ -115,7 +115,7 @@ const allBlocks = [];
       finding: { title: '《标题》', url: 'https://example.com/a', image: 'https://example.com/a.jpg', note: '摘要。' },
     }, cfg.sceneOverride, cfg.proactiveOutlet)]);
     surfBlocks.push(['失败兜底/' + st.cluster, buildProactiveNotice(st, tg, {
-      scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。',
+      scene: 'find_activity', reason: 'surf', failure: '没翻出什么合适的（超时）。',
     }, cfg.sceneOverride, cfg.proactiveOutlet)]);
   }
   const surfBad = surfBlocks.filter(([, b]) => assertBlockShape(b).length);
@@ -138,7 +138,7 @@ const allBlocks = [];
 
   // 兜底块必须有可读的失败描述，不能是空壳
   const emptyFail = surfBlocks.filter(([label, b]) =>
-    label.startsWith('失败兜底') && !b.includes('没翻成'));
+    label.startsWith('失败兜底') && !b.includes('没翻出什么合适的'));
   check('失败兜底块带可读说明', emptyFail.length === 0, emptyFail.slice(0, 2).map((x) => x[0]));
 
   const multiHead = allBlocks.filter(([, b]) => b.split('\n').filter((l) => /^【积温·/.test(l)).length !== 1);
@@ -190,7 +190,7 @@ console.log('\n[3] 负向用例 —— 断言必须抓得住破裂');
   check('产物块本身合规（基线）', assertBlockShape(surfGood).length === 0, assertBlockShape(surfGood));
 
   const surfInnerBracket = surfGood.split('\n');
-  surfInnerBracket.splice(2, 0, '【之前独处冲浪时发现的东西】：');
+  surfInnerBracket.splice(2, 0, '【搜到了一条有意思的内容】：');
   check('产物块内层带【】→ 判为不合规',
     assertBlockShape(surfInnerBracket.join('\n')).length > 0);
 
@@ -226,7 +226,7 @@ console.log('\n[4] 剥离语义 —— 与 Serein 行为对齐');
       finding: { title: '《标题》', url: 'https://example.com/a', image: 'https://example.com/a.jpg', note: '摘要。' },
     }, cfg.sceneOverride, cfg.proactiveOutlet),
     buildProactiveNotice(STATES[3], tg, {
-      scene: 'find_activity', reason: 'surf', failure: '刚才想去翻点东西，没翻成（超时）。',
+      scene: 'find_activity', reason: 'surf', failure: '没翻出什么合适的（超时）。',
     }, cfg.sceneOverride, cfg.proactiveOutlet),
   ];
   let surfStripOk = true;
@@ -244,7 +244,7 @@ console.log('\n[4] 剥离语义 —— 与 Serein 行为对齐');
   const surfBlk = surfSample[0];
   const innerBody = surfBlk.split('\n').slice(1, -1).join('\n');
   check('产物块的内层正文会被剥离（尾句已进 BLOCK_TAIL_RE）',
-    !stripJiwenBlocks(surfBlk + '\n' + HER_WORDS).includes('之前独处冲浪时发现的东西'),
+    !stripJiwenBlocks(surfBlk + '\n' + HER_WORDS).includes('搜到了一条有意思的内容'),
     stripJiwenBlocks(surfBlk + '\n' + HER_WORDS));
 }
 
