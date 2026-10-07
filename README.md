@@ -10,8 +10,7 @@
 ```
 用户在 Operit / OMate 发消息
   → 积温桥（VPS，反向代理）
-       ├─ resetConnection()          ← 任何窗口的用户消息都触发
-       ├─ 取五轴状态 → 拼【积温·此刻】块
+       ├─ 取五轴状态 → 拼【积温·此刻】块   ← connection 由判定器 delta + tick 漂移驱动（2026-10-08 起，不再每轮归零）
        ├─ 注入到最后一条 user 消息
        └─ 异步：喂判定器（agnes-3.0-flash）→ applyDelta
   → Serein 网关（18217）
@@ -105,6 +104,51 @@
 衰减由引擎侧管（我们不用碰）：`immersionDecay = 0.01/分钟`。0.4 → 约 10 分钟后落进
 `0.1~0.3` 死带（两句都不出）、约 30 分钟后回到 idle；`immersion ≤ 0.01` 且距活动 > 60 分钟时
 `lastActivity` 被清空。也就是说段4 只在"刚做完一件事"的窗口里有话可说 —— 这正是它该有的样子。
+
+### 二之二 · 补二：撤掉 `resetConnection()` —— connection 交回判定器（2026-10-08）
+
+桥原先在**每轮真人开口**时调 `jiwen.resetConnection()`，它把 `state.connection` 直接写成 0。
+两处损害：
+
+| # | 现象 | 机制 |
+|---|---|---|
+| ① | 判定器返 `connection:-0.15`（她热情/认真）**完全无效** | `clamp(0 + (-0.15), 0, 1) = 0` —— 轴下界就是 0，负向没有落点 |
+| ② | 判定器返 `+0.15`（她敷衍/冷淡）**也等于无效** | 每轮开头必归零 → c 峰值被钉死在 0.15，而第一个消费点（留意线）是 **0.20** |
+
+**这条不是引擎的问题，是桥自己加的一刀砍错了地方。** 作者原设计本来就不是"回复即归零"：
+
+```
+vendor/jiwen.js:41    connectionOnReply: 0.20,  // [已弃用] 对方回复时 connection 降幅（现由 LLM delta 接管）
+vendor/jiwen.js:277   // 连接需求降幅现由外部 LLM 分析（如 analyzeChatSegment）通过 applyDelta 注入。
+```
+
+处置：
+
+| 项 | 做法 |
+|---|---|
+| `jiwen.resetConnection()` 调用 | **删除**（`bridge.js` 请求主流程）。connection 改由「判定器 delta + tick 漂移」驱动 |
+| 判定器的 `connection` 维 | **保留**（`lib/analyzer.js` 规则 7 + clamp `[-0.50, 0.30]` 原样）—— 撤 reset 是为了让它生效，不是砍掉它 |
+| 「她开口」的缓解兜底 | 新增 `replyRelief()`：判定**没跑成**时补一顿 `applyDelta({connection: -CONNECTION_RELIEF})`，默认 `0.35` |
+
+兜底只在"她开口了但没人判"时触发，否则 c 只涨不降 → 会被误判成"她很久没来"而乱触发唤醒：
+
+| 情形 | 兜底？ | 理由 |
+|---|---|---|
+| 判定成功拿到 delta | 否 | 降幅已经在 delta 的 `connection` 分量里，再补就是重复扣减 |
+| 被 `dialogDedup` 跳过的工具轮 | 否 | 同一轮前一次已经判过、delta 已生效 |
+| 没配 `LLM_KEY` | 是 | 判定器根本不会跑 |
+| 对话长度 < 2 条 | 是 | 判定器不接（`extractRecentDialog` 取不满） |
+| 判定返回空 / 报错 | 是 | 分别走 `analyzer returned empty` / `analyzer failed` 两支 |
+
+⚠️ **不能把兜底量调成"比敷衍增量小"来图省事。** 敷衍档给的是 `+0.05 ~ +0.25`，
+兜底 `0.35` 只要生效就会把它盖掉 —— 但兜底**只在失败路径走**，两条支路互不重叠，所以不冲突。
+真要降低敏感度该调 `connectionRate`，不是调它。
+
+**不影响什么**：描述层第 1 段仍然只在主动唤醒侧出。理由从"c 恒为 0"换成了
+「段1 的问句全是**时间维度**的（「她很久没动静了。」），而此刻块的场景是"她刚说完这一句"，一句都不成立」。
+
+回归：`_test/connection_check.js`（24 例，含新旧行为对照）+ `_test/e2e_bridge.js` 用例 4/4b
+（跨进程实证：2 次 `+0.15` → `connection = 0.30` 越过留意线；判定器失败 → 兜底一次落到 0）。
 
 ---
 
@@ -432,7 +476,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 
 | 闸门 | 需要 | 时间尺度 |
 |---|---|---|
-| `contact` | `c ≥ 0.35` | `resetConnection` 归零后爬 **399 分钟 ≈ 6.7 h** |
+| `contact` | `c ≥ 0.35` | 纯靠 tick 漂移从 0 爬要 **399 分钟 ≈ 6.7 h**；撤 reset 后 delta 也会推，实际更快 |
 | 自我调节 → `find_activity` | `arousal ≥ 0.70` | 0.7 回归到 0 只要 **140 分钟 ≈ 2.3 h** |
 | 开口 → `find_activity(pride_block)` | `c ≥ 0.35` **且** `p ≥ 0.50` | 本次实测时**不可达** —— 该路前提是 `prideDefendThreshold` 打开，而 vendor 默认给的是 `1.0`（哨兵值＝永不）。**2026-10-07 桥已显式打开（0.20 / 0.004），这条路已通，"两闸门互斥"的结论随之失效，已重测**（见下方 10-07 补测）。 |
 
@@ -496,7 +540,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 
 | # | 症状 | 位置 |
 |---|---|---|
-| ① | 多余执行 `resetConnection()`，把 connection 硬归 0，抹掉这次唤醒本身的意义 | `bridge.js` 请求主流程 |
+| ① | 多跑一次「她开口」的 connection 缓解，抹掉这次唤醒本身的距离感 | `bridge.js` 请求主流程 |
 | ② | 把唤醒通知当"她的发言"喂给判定器打分 → 凭空产生一次错误漂移 | 同上 |
 | ③ | **判定器每轮读到桥自己注入的此刻块**（最普遍，与唤醒无关） | `extractRecentDialog` 的调用顺序 |
 
@@ -524,9 +568,10 @@ TTL 2 小时 + 上限 20 条，杜绝陈旧文本被误认。
 
 ```js
 const loopback = loopbackGuard.claim(extractLastUserText(body));
-if (!loopback) await jiwen.resetConnection();          // 只有真人开口才重置
-...
 if (!loopback && dialog.length >= 2 && CFG.llmKey) {   // 只有真人开口才喂判定器
+  ...                                                  // 判定成功 → connection 由 delta 决定
+}
+if (!loopback && !connectionHandled) replyRelief('not analyzed');  // 没判成 → 兜底缓解
 ```
 
 命中时日志里会出现 `LOOPBACK=contact age=63s n=1`，可用于核对真实回环间隔与调用形态。
@@ -565,12 +610,12 @@ if (block && !loopback && shouldInject(block, state)) {   // 回环让位
 **未采纳的备选**：让 Operit 只投一个「信封」（如 `【积温·此刻】`），桥按
 `loopback.scene` 用请求时刻的状态重渲染完整块。文案与投递彻底解耦，但
 `loopbackGuard` 是**进程内内存**，桥一重启那一轮就认领不到 → 唤醒丢失 +
-`resetConnection`/判定器误开，代价比收益大。
+connection 缓解 / 判定器误开，代价比收益大。
 
 ### 已知残留
 
 - 桥重启（`systemctl restart`）会清空进程内的回环记忆，重启后投递的那一轮通知
-  会被当成"她的话"（多一次 `resetConnection` + 喂判定器）。
+  会被当成"她的话"（多一次 connection 缓解 + 喂判定器）。
 - 积温块是拼进 user 正文的，会被 Serein 存进 `raw_events` 并记成**她的消息**
   （实测 8435 条里 71 条含"积温"，其中 user 43 / assistant 28）。
   影响语义检索与新窗口续接材料。
@@ -716,7 +761,10 @@ const changed = sig !== lastInjectSig;
 
 **验证**：`_test/throttle_check.js` 5/5；`_test/e2e_bridge.js` 17/17；VPS 实测连续三轮 `inject=true`（正文全程一字未变）。
 
-**遗留观察点**：`connection` 每轮被 `resetConnection()` 清零，导致连接需求在频繁聊天时永远涨不起来（需靠 tick 的时间累积，`CONNECTION_RATE=0.0007/min` ≈ 24 小时涨满）。真实节奏下是否合适，待长时间观察。
+**观察点（2026-10-08 更新）**：原先 `connection` 每轮被 `resetConnection()` 清零，
+连接需求在频繁聊天时永远涨不起来。**reset 已撤**（见「二之二 · 补二」），
+现在由判定器 delta + tick 漂移共同驱动 —— 她敷衍能推高 c、她热情能压低 c。
+真实节奏下 c 收敛到什么水平、会不会偏敏，待长时间观察。
 
 ---
 
@@ -900,8 +948,10 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 这两者方向相反，直接照抄会写反，已在 prompt 里显式说明。
 
 **connection 的处理**：用户映射里多处写"connection 清零（-1.0）"，已改为 **`connection: 0`**。
-原因：积温 connection 范围 0~1、delta 上限 -0.5，且桥每轮已自动 `resetConnection()`，
+原因：积温 connection 范围 0~1、delta 上限 -0.5，当时桥每轮已自动 `resetConnection()`，
 判定器再给负值是重复扣减。
+（2026-10-08 更新：`resetConnection` 已撤 —— 它连"她开口但敷衍"一起抹掉了，
+见「二之二 · 补二」。现在 connection 交回判定器，兜底只在判定失败时补。）
 
 ### 8.2 自主唤醒的投递 —— 已定：走 MCP 队列 ✅
 

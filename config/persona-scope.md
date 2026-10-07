@@ -50,6 +50,14 @@
 
 **不新增轴。** 包括 `libido` 在内的扩展方案已否决——那会走向心潮式的复杂度。
 
+**`connection` 由谁驱动（2026-10-08 变更）**：不再是"她开口就归零"。两条来源 ——
+① tick 时间漂移（`CONNECTION_RATE`）；② 判定器读这轮对话给的 delta（她热情 → 负、她敷衍 → 正）。
+判定器没跑成时（无 key / 对话太短 / 返回空 / 报错）由桥兜底一顿 `-CONNECTION_RELIEF`，
+免得 c 只涨不降被误判成"她很久没来"。
+作者原本就是这么设计的：`vendor/jiwen.js:41` 的 `connectionOnReply` 已标 [已弃用]，
+:277 明写「连接需求降幅现由外部 LLM 分析…通过 applyDelta 注入」。
+我们先前在桥里加的 `resetConnection()` 属于与作者设计相悖的人为覆盖，已撤。见 README 二之二 · 补二。
+
 ---
 
 ## 五、桥里唯一的一处"补位"逻辑：描述层（`lib/describe.js`）

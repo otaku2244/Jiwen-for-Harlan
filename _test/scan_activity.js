@@ -72,7 +72,7 @@ async function runOne(cfg, patternFn) {
   for (let d = 0; d < DAYS; d++) {
     for (let m = 0; m < DAY_MIN; m += TICK) {
       VNOW += TICK * 60 * 1000;
-      if (patternFn(m)) { await j.resetConnection(); lastMsgAt = VNOW; continue; }
+      if (patternFn(m)) { await j.applyDelta({ connection: -0.35 }); lastMsgAt = VNOW; continue; }
 
       const trig = await j.tick(TICK);
       for (const t of trig) {

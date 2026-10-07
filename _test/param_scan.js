@@ -65,7 +65,7 @@ async function runOne(cfg) {
       // 她在 08:00-08:10 和 20:00-20:10 出现
       const sheAppears = (m >= 480 && m < 490) || (m >= 1200 && m < 1210);
       if (sheAppears) {
-        await j.resetConnection();
+        await j.applyDelta({ connection: -0.35 });
         lastMsgAt = VNOW;
         continue;
       }

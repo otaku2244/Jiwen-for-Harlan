@@ -5,8 +5,8 @@
 // 此刻块 = buildInjectionBlock(state, toneGrid, desc)
 //   走 toneGrid.getStyleGuidance（proactive 侧的对应方法是 getPromptContext）
 //   描述层由 desc 提供，拼在 45 格之前
-//   bridge.js 里非回环轮先 resetConnection() 再建块 → connection 恒为 0
-//   → 描述层不出第 1 段
+//   bridge.js 里的非回环轮：connection 由判定器 delta 驱动（2026-10-08 前是 resetConnection 归零）
+//   → 描述层仍不出第 1 段（段1 是时间维度的话，此刻块用不上；与 connection 取值无关）
 //   → urgencyBoost 四档已全 null → 正文没有 urgency 尾注 → 45 格恒等于 profiles[簇][pride档]
 
 const fs = require('fs');
@@ -64,8 +64,9 @@ w('```');
 w();
 w('## 两条硬事实');
 w();
-w('1. **此刻块的 connection 恒为 0。** `bridge.js` 里非回环轮先 `resetConnection()` 再建块。');
-w('   于是 connection 恒为 0 → 描述层不出第 1 段；urgencyBoost 四档全 null → **正文没有 urgency 尾注**，');
+w('1. **此刻块不出描述层第 1 段。** 段1 的问句全是时间维度的（「她很久没动静了。」），');
+w('   而此刻块的场景是"她刚说完这一句" —— 一句都不成立，所以只留给主动唤醒侧。');
+w('   段2/3/4 照常出。urgencyBoost 四档全 null → **正文没有 urgency 尾注**，');
 w('   45 格后面干干净净，不会多出「她安静得有点久了」那类句子。');
 w('2. **块内没有档位行。** 2026-10-08 起 `心情/姿态/心跳/想念` 那条整行删除，');
 w('   删除理由与不可补回的原因写在 `lib/inject-text.js` 文件头，回归守卫在');

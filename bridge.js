@@ -58,6 +58,10 @@ const CFG = {
   logFile: process.env.LOG_FILE || path.join(__dirname, 'data', 'bridge.log'),
   tickMinutes: parseFloat(process.env.TICK_MINUTES || '5'),
   connectionRate: parseFloat(process.env.CONNECTION_RATE || '0.0007'),
+  // 兜底：判定器**没跑成**时，「她开口」这一轮记一次的 connection 缓解量。
+  // 判定正常时不需要它 —— 那时降幅由 delta 里的 connection 分量承担（作者设计）。
+  // 量级取 0.35，与唤醒投递后的释放同一档（「一次开口事件释放掉 0.35」）。
+  connectionRelief: parseFloat(process.env.CONNECTION_RELIEF || '0.35'),
   valenceSetpoint: parseFloat(process.env.VALENCE_SETPOINT || '-0.05'),
   connectionAccel: parseFloat(process.env.CONNECTION_ACCEL || '1.5'),
   accelDelay: parseFloat(process.env.ACCEL_DELAY || '30'),
@@ -223,6 +227,16 @@ const actionCooldown = createSceneCooldown({ minutes: CFG.actionCooldownMinutes 
 const dialogDedup = createDialogDedup({ windowSeconds: CFG.analyzeDedupSeconds });
 // 去重跳过的日志只在同一轮打一次（工具可能连发多次请求）
 let _lastDedupSkipKey = null;
+
+// 「她开口」的 connection 缓解兜底（2026-10-08）。
+// 只在**判定器没能给出 delta**时用：没配 key / 对话太短 / 返回空 / 报错。
+// 判定成功时不许调 —— 那时降幅已经在 delta 的 connection 分量里，
+// 再补一次就是重复扣减。
+function replyRelief(reason) {
+  jiwen.applyDelta({ connection: -CFG.connectionRelief })
+    .then(() => log('INFO', `reply relief: -${CFG.connectionRelief} (${reason})`))
+    .catch((e) => log('WARN', 'reply relief failed: ' + e.message));
+}
 
 // ── 积温实例（全局唯一）──────────────────────────
 const jiwen = createJiwen({
@@ -496,12 +510,21 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     //   识别到就说明她一个字都没说，只是一个系统侧回环。
     const loopback = loopbackGuard.claim(extractLastUserText(body));
 
-    // ── 1. 用户开口 → resetConnection（只有真人开口才触发）──
-    if (!loopback) {
-      try {
-        await jiwen.resetConnection();
-      } catch (e) { log('WARN', 'resetConnection failed: ' + e.message); }
-    }
+    // ── 1. 她开口 → **不重置** connection（2026-10-08 撤掉 resetConnection）──
+    //
+    //   作者原设计：对方回复带来的 connection 降幅，由 LLM 读这轮对话内容决定，
+    //   不是"回复即归零"。
+    //     vendor/jiwen.js:41   connectionOnReply 已标 [已弃用]「现由 LLM delta 接管」
+    //     vendor/jiwen.js:277  「连接需求降幅现由外部 LLM 分析…通过 applyDelta 注入」
+    //
+    //   桥原先在这里调 resetConnection()（= state.connection 硬置 0）。两处损害：
+    //     ① 把她"开口但敷衍"这个中间态一起抹掉 —— 敷衍本该让 c 上升；
+    //     ② 建块与 applyDelta 都发生在归零之后 → clamp(0 + 负, 0, 1) 恒 0，
+    //        判定器的 connection 维**一个字都落不下来**（负向全废、正向封顶 0.15）。
+    //
+    //   撤掉之后 connection 完全由「判定器 delta + tick 漂移」驱动。
+    //   判定没跑成的情形（无 key / 对话太短 / 返回空 / 报错）在 §5 兜底一顿缓解 ——
+    //   否则她明明在说话、c 却只涨不降，会被误判成"她很久没来"而乱触发唤醒。
 
     // ── 2. 取状态 → 生成此刻块 ──
     let state = {};
@@ -561,9 +584,16 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     //    此时末 4 条 user/assistant 一字未变 → 判定器会把同一段对话判 N 次，
     //    delta 叠加 N 次。（2026-10-07 实测同一轮判 4 次：pride 该掉 0.12 实际掉 0.66。）
     //    原先靠 LLM_MIN_INTERVAL_SECONDS=20 挡，但工具轮间隔 33~49 秒，全部放行。
+    //
+    // ── 和 connection 的关系（2026-10-08 撤 reset 之后）──
+    //   判定器**跑成了** → connection 的降幅就在 delta 里，不再兜底。
+    //   被 dedup 跳过的工具轮 → 同一轮已经判过、delta 已经生效 → 也不兜底。
+    //   其余全是"她开口了但没人判" → replyRelief() 补一顿固定缓解。
+    let connectionHandled = false;
     if (!loopback && dialog.length >= 2 && CFG.llmKey) {
       const dialogKey = dialogKeyOf(dialog);
       if (!dialogDedup.accept(dialogKey)) {
+        connectionHandled = true; // 同一轮：前一次已经判过
         // 同一轮只提示一次（工具可能连发多次）
         if (dialogKey !== _lastDedupSkipKey) {
           _lastDedupSkipKey = dialogKey;
@@ -571,16 +601,23 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
         }
       } else {
         _lastDedupSkipKey = null;
+        connectionHandled = true;
         setImmediate(() => {
           analyzeDialog(dialog, { ...CFG, log }).then((delta) => {
             if (delta) {
               jiwen.applyDelta(delta).catch((e) => log('WARN', 'applyDelta failed: ' + e.message));
               log('INFO', 'delta applied: ' + JSON.stringify(delta));
+            } else {
+              replyRelief('analyzer returned empty');
             }
-          }).catch((e) => log('WARN', 'analyzer failed: ' + e.message));
+          }).catch((e) => {
+            log('WARN', 'analyzer failed: ' + e.message);
+            replyRelief('analyzer failed');
+          });
         });
       }
     }
+    if (!loopback && !connectionHandled) replyRelief('not analyzed');
 
     // ── 6. 转发 ──
     forward(u.pathname, u.search, req.method, req.headers, outBuf, res);

@@ -42,14 +42,23 @@ const upstream = http.createServer((req, res) => {
 });
 
 let llmCalled = 0;
+let llmFail = false; // 用例 4b 用：让判定器拿到非 JSON 内容 → 走失败分支 → 触发兜底缓解
 const llm = http.createServer((req, res) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     llmCalled++;
     res.writeHead(200, { 'content-type': 'application/json' });
+    if (llmFail) {
+      res.end(JSON.stringify({
+        choices: [{ message: { content: '抱歉，我不能完成这个请求。' } }],
+      }));
+      return;
+    }
+    // connection 取**正向**（+0.15 = 「她敷衍」那一档）：撤掉 resetConnection 之后，
+    // 这是唯一能证明"delta 真的推得动 c"的方向 —— 负向在 c=0 时无论如何都是 0。
     res.end(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ pride: -0.15, valence: 0.10, arousal: -0.08, connection: -0.30 }) } }],
+      choices: [{ message: { content: JSON.stringify({ pride: -0.15, valence: 0.10, arousal: -0.08, connection: 0.15 }) } }],
     }));
   });
 });
@@ -195,7 +204,29 @@ function check(name, cond, detail) {
   check('判定器被调用', llmCalled > 0, 'calls=' + llmCalled);
   const st = JSON.parse(fs.readFileSync(STATE, 'utf8'));
   check('delta 已叠加到状态（pride 为负）', st.pride < 0, 'pride=' + st.pride);
-  check('connection 被 reset 后叠加 delta', st.connection <= 0.01, 'connection=' + st.connection);
+  check('connection 由判定器 delta 直接驱动（resetConnection 已撤）：2 次 +0.15 → 0.30',
+    Math.abs(st.connection - 0.30) < 0.01, 'connection=' + st.connection);
+  check('0.30 已越过留意线 0.20（旧行为下这个值被 reset 钉死在 ≤0.15）',
+    st.connection >= 0.20, 'connection=' + st.connection);
+
+  // ── 用例 4b：判定器失败 → 兜底缓解（-CONNECTION_RELIEF）──
+  //   "她开口了但没人判"这一支必须有保险公司：否则 c 只涨不降，
+  //   会被误判成"她很久没来"而乱触发唤醒。
+  const before4b = JSON.parse(fs.readFileSync(STATE, 'utf8')).connection;
+  llmFail = true;
+  const payload4b = JSON.parse(JSON.stringify(payload));
+  payload4b.messages[3] = { role: 'user', content: '嗯' };
+  await req(BRIDGE_PORT, '/v1/chat/completions', payload4b, {
+    authorization: 'Bearer test-token-at-least-24-chars-abcdef',
+    'x-serein-window-id': 'operit',
+  });
+  await wait(1600);
+  const after4b = JSON.parse(fs.readFileSync(STATE, 'utf8')).connection;
+  check('判定器失败 → 兜底缓解生效（c 从 0.30 被压回）',
+    after4b < before4b, `${before4b} → ${after4b}`);
+  check('兜底量 = 0.35 → 一次就落到轴下界 0',
+    after4b === 0, 'connection=' + after4b);
+  llmFail = false;
 
   // ── 用例 5：状态持久化 ──
   check('state.json 已落盘', fs.existsSync(STATE));

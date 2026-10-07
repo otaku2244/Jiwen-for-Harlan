@@ -237,7 +237,7 @@ const t0 = VNOW;
     // 1. 时间推进到她开口前（期间 connection 自然累积、可能触发主动唤醒）
     const peakConn = await advanceTo(ev.day, ev.hour);
 
-    // 2. 她开口 → resetConnection（桥的真实行为）
+    // 2. 她开口 → 判定器 delta（桥的真实行为；判定没跑成时兜底 -0.35）
     const beforeState = { ...store };
     await jiwen.resetConnection();
 

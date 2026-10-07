@@ -78,7 +78,7 @@ async function step(minutes, note) {
   await jiwen.load();
 
   console.log('════════ 场景一：她在 08:00 说了一句，然后消失 ════════');
-  await jiwen.resetConnection();
+  await jiwen.applyDelta({ connection: -0.35 });
   await jiwen.applyDelta({ valence: 0.15, arousal: -0.05, connection: -0.30 });
   rows.push({ at: fmt(VNOW), note: '她说"早"+ 判定器delta', ...(await snap()) });
 
@@ -100,8 +100,8 @@ async function step(minutes, note) {
   console.log(`  切窗前 connection = ${before.connection.toFixed(3)}`);
 
   // 模拟 omate 窗口用户发言 → reset
-  console.log('  [omate 窗口] 用户发消息 → resetConnection()');
-  await jiwen.resetConnection();
+  console.log('  [omate 窗口] 用户发消息 → 判定器 delta（兜底 -0.35）');
+  await jiwen.applyDelta({ connection: -0.35 });
   const after = await jiwen.getState();
   console.log(`  切窗后 connection = ${after.connection.toFixed(3)}`);
   console.log(`  → 全局单实例${after.connection === 0 ? ' 生效（无人格分裂）' : ' 失效！'}`);

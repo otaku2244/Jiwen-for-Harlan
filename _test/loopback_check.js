@@ -190,8 +190,12 @@ console.log('\n[5] bridge.js 顺序断言（防回归）');
   const iInject = src.indexOf('const r = injectIntoBody(body, block);');
   check('两处都能在源码里定位', iDialog > -1 && iInject > -1, { iDialog, iInject });
   check('判定器取 dialog 早于注入（bug ③ 的关键）', iDialog > -1 && iInject > -1 && iDialog < iInject);
-  check('resetConnection 受 loopback 保护',
-    /if\s*\(!loopback\)\s*\{[\s\S]*?resetConnection/.test(src));
+  check('resetConnection 已从 bridge 撤除（2026-10-08：改由判定器 delta 驱动 connection）',
+    !/jiwen\.resetConnection\(/.test(src));
+  check('connection 兜底缓解受 loopback 保护',
+    /if\s*\(!loopback\s*&&\s*!connectionHandled\)\s*replyRelief/.test(src));
+  check('兜底缓解只在判定器没跑成时触发（判定成功路径里不调 replyRelief）',
+    /if \(delta\) \{[\s\S]*?delta applied[\s\S]*?\} else \{\s*replyRelief\(/.test(src));
   check('判定器喂入受 loopback 保护',
     /if\s*\(!loopback && dialog\.length/.test(src));
   check('fireProactive 里有 remember',

@@ -94,7 +94,7 @@ async function simulate(days, pollMin) {
     for (const plan of CHAT_PLAN) {
       for (let T = 0; T < plan.turns; T++) {
         if (minOfDay === plan.at + T * 5) {
-          await jiwen.resetConnection();
+          await jiwen.applyDelta({ connection: -0.35 });
           await jiwen.applyDelta({ ...plan.delta });
           lastUserAtMin = abs;
         }

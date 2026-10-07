@@ -171,8 +171,8 @@ w(`| 4 沉浸 | \`immersion>0.3\` 且有活动 | ${cfg.describe.immersion.doing}
 w('| 4 沉浸 | `0.1 ≤ immersion ≤ 0.3` | （死带，两句都不出） |');
 w(`| 4 沉浸 | \`immersion<0.1\` | ${cfg.describe.immersion.idle} |`);
 w('');
-w('> **此刻块（reactive）不出第 1 段** —— 那块建块时 `connection` 恒为 0');
-w('> （`resetConnection()` 在建块之前），出了就是恒定的一句「刚和她聊完不久…」。');
+w('> **此刻块（reactive）不出第 1 段** —— 段1 的问句全是时间维度的（「她很久没动静了。」），');
+w('> 而此刻块的场景是"她刚说完这一句"，一句都不成立 → 段1 只留给主动唤醒侧。');
 w('');
 w('> 第 4 段的真来源是 `lib/activity.js`：冲浪 spawn 成功后登记一次活动');
 w('> （`search` → `immersion = 0.4`），产物回投时再刷一次时间戳。之后按 0.01/分钟');
