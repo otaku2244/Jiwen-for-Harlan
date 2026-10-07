@@ -15,8 +15,11 @@ const TICK_MIN = 5;          // 桥的 TICK_MINUTES
 const POLL_MIN = 30;         // Operit 工作流的 interval
 const QUIET_START = 0;       // 与 .env 一致
 const QUIET_END = 8;
-const DAILY_MAX = 6;
+const DAILY_MAX = 8;         // 与桥 .env 默认一致（2026-10-07 起 6 → 8）
 const CONTACT_DECAY = -0.35; // fireProactive 外层的开口衰减
+// ⚠️ 与桥一致（2026-10-07 起）：同场景冷却，否则 find_activity 会把日上限瞬间打光、
+//    连带把 contact 一起挡在门外（本探针第一次跑就是这个结果，属模拟失真而非真实结论）。
+const COOLDOWN_MIN = 180;
 
 // ── 她的出现节奏（按天循环，分钟偏移）──
 // 两次出现 → 两段静默 → param_scan 实测约 2 次 contact/天。
@@ -39,7 +42,13 @@ async function simulate(days, pollMin) {
     onSave: async (s) => { Object.assign(state, s); },
     onLoad: async () => ({ ...state }),
     getPromptContext: () => '', getStyleGuidance: () => '',
-    rates: { valenceSetpoint: -0.05, connectionAccel: 1.5, accelDelay: 30 },
+    rates: {
+      valenceSetpoint: -0.05, connectionAccel: 1.5, accelDelay: 30,
+      // ⚠️ 与桥保持一致（2026-10-07 起）。vendor 默认 prideDefendThreshold=1.0 是
+      //    "永不"的哨兵值 → find_activity 永远不可达 → 本探针测不到混场景队列。
+      //    桥打开骄傲防御后，find_activity 会在 contact 之前先触发，队列才有意义。
+      prideDefendThreshold: 0.20, prideDefendRate: 0.004,
+    },
     verbose: false, onLog: () => {},
   });
   await jiwen.load();
@@ -55,6 +64,10 @@ async function simulate(days, pollMin) {
     staleDelivered: 0,   // 投出去时她的前提已作废（这中间她开过口）
     staleByScene: { contact: 0, find_activity: 0 },
     deliveredByScene: { contact: 0, find_activity: 0 },
+    // 两种投递策略各记一次：FIFO = 取最旧（历史实现），LIFO = 取最新（当前实现）
+    fifoDelivered: { contact: 0, find_activity: 0 },
+    lifoDelivered: { contact: 0, find_activity: 0 },
+    lifoDroppedContact: 0,
     lagSum: 0, lagMax: 0,
     maxQueue: 0,
     aMaxAtContact: -Infinity, aMinAtContact: Infinity,
@@ -64,6 +77,7 @@ async function simulate(days, pollMin) {
   let queue = [];
   let sendDay = -1, sendCount = 0;
   let lastUserAtMin = -Infinity;
+  const lastFireAt = { contact: -Infinity, find_activity: -Infinity };
   const totalMin = days * 1440;
   const localHour = (m) => Math.floor((m % 1440) / 60);
   const inQuiet = (m) => {
@@ -105,8 +119,12 @@ async function simulate(days, pollMin) {
 
     // ── 投递（照抄 fireProactive 的闸门；**衰减无条件执行**，与 bridge.js 一致）──
     for (const t of triggers) {
+      // 同场景冷却：与 bridge.js tickOnce 一致，通过且真投出才记账
+      // （被静默/日上限挡掉的不吃冷却 —— 桥里是 `if (sent) mark`）
+      if ((abs - lastFireAt[t.action]) < COOLDOWN_MIN) continue;
       if (!inQuiet(abs) && sendCount < DAILY_MAX) {
         sendCount++;
+        lastFireAt[t.action] = abs;
         queue.push({ scene: t.action, reason: t.reason || null, at: abs });
         rec.maxQueue = Math.max(rec.maxQueue, queue.length);
       }
@@ -119,17 +137,22 @@ async function simulate(days, pollMin) {
       if (queue.length) {
         rec.pollsWithQueue++;
         const head = queue[0];
+        const latest = queue[queue.length - 1];
         const nContact = queue.filter((q) => q.scene === 'contact').length;
         const nFind = queue.length - nContact;
         const lag = abs - head.at;
         rec.lagSum += lag; rec.lagMax = Math.max(rec.lagMax, lag);
         rec.deliveredByScene[head.scene] = (rec.deliveredByScene[head.scene] || 0) + 1;
+        // 两种策略各记一次，好直接对比（FIFO = 旧实现，LIFO = 现在的 mcp.js）
+        rec.fifoDelivered[head.scene]++;
+        rec.lifoDelivered[latest.scene]++;
 
         if (nContact && nFind) {
           rec.bothInQueue++;
           rec.gaps.push({ at: abs, queue: queue.map((q) => `${q.scene}@${q.at}`).join(', ') });
-          if (head.scene === 'contact') rec.droppedFind++;
-          else rec.droppedContact++;   // 坏方向
+          if (head.scene === 'find_activity') rec.droppedContact++;   // FIFO 坏方向
+          else rec.droppedFind++;
+          if (latest.scene === 'find_activity') rec.lifoDroppedContact++;
         }
         if (lastUserAtMin > head.at) {
           rec.staleDelivered++;
@@ -163,6 +186,9 @@ function regressMinutes(from, rate) {
     console.log(`find_activity 触发             ${rec.findFires}`);
     console.log(`Operit 拉取                    ${rec.polls} 次（队列非空 ${rec.pollsWithQueue} 次 = 投递轮次）`);
     console.log(`投递轮次里：contact ${rec.deliveredByScene.contact} 条 / find_activity ${rec.deliveredByScene.find_activity} 条`);
+    console.log(`  策略对比 FIFO(取最旧) contact ${rec.fifoDelivered.contact} / find ${rec.fifoDelivered.find_activity}` +
+      ` ｜ LIFO(取最新，现行) contact ${rec.lifoDelivered.contact} / find ${rec.lifoDelivered.find_activity}`);
+    console.log(`  LIFO 丢掉更早的 contact        ${rec.lifoDroppedContact}`);
     console.log(`队列同时压着两种场景            ${rec.bothInQueue}`);
     console.log(`同一 tick 同时产出两种          ${rec.bothInOneTick}`);
     console.log(`→ 投 find_activity、丢 contact  ${rec.droppedContact}   ← 坏方向`);

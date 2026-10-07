@@ -23,18 +23,26 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { URL } = require('url');
 
+const { loadEnvFile } = require('./lib/env.js');
+
+// ── 载入 .env（同目录）────────────────────────────
+// ⚠️ 必须排在其他 lib 的 require **之前**。
+//    有些 lib 在**模块顶层**读 process.env 并算成常量 ——
+//    例如 analyzer.js 的 `LLM_MIN_INTERVAL_SECONDS` / `LLM_BREAKER_SECONDS`
+//    是模块级 const，require 那一刻就求值完。loadEnvFile 若晚一步，
+//    .env 里这两项**静默失效**（线上写了也白写，永远走默认 20s/300s）。
+const envPath = require('path').join(__dirname, '.env');
+loadEnvFile(envPath);
+
 const { createJiwen } = require('./vendor/jiwen.js');
 const { createToneGrid } = require('./vendor/tone-grid.js');
 const { createToneWrapper } = require('./lib/tone-wrap.js');
 const { buildInjectionBlock, buildProactiveNotice, stripJiwenBlocks, assertBlockShape } = require('./lib/inject-text.js');
 const { createLoopbackGuard } = require('./lib/loopback.js');
+const { createSceneCooldown, createDialogDedup } = require('./lib/repeat-guard.js');
 const { analyzeDialog } = require('./lib/analyzer.js');
-const { loadEnvFile } = require('./lib/env.js');
 const { createMcpHandler } = require('./lib/mcp.js');
 const { createClock } = require('./lib/clock.js');
-
-// ── 载入 .env（同目录）────────────────────────────
-loadEnvFile(path.join(__dirname, '.env'));
 
 const CFG = {
   port: parseInt(process.env.BRIDGE_PORT || '18220', 10),
@@ -56,7 +64,10 @@ const CFG = {
   injectThrottleSeconds: parseInt(process.env.INJECT_THROTTLE_SECONDS || '1800', 10),
   proactiveEnabled: (process.env.PROACTIVE_ENABLED || 'true') !== 'false',
   proactiveWebhook: process.env.PROACTIVE_WEBHOOK || '',
-  proactiveMaxPerDay: parseInt(process.env.PROACTIVE_MAX_PER_DAY || '6', 10),
+  // 日上限：contact 与 find_activity **共用**同一个计数（见 checkDailyLimit）。
+  // 默认 8 是配合 find_activity 上线后的量级：她整日不出现时实测 contact 4.3 + find 4.3
+  // ≈ 8.6 次/日；留在 6 会把 find_activity 挤到 2 次以下，达不到"至少 2 次"。
+  proactiveMaxPerDay: parseInt(process.env.PROACTIVE_MAX_PER_DAY || '8', 10),
   quietStart: parseInt(process.env.QUIET_START || '0', 10),
   quietEnd: parseInt(process.env.QUIET_END || '8', 10),
   // 业务时区偏移（小时）。静默时段与日上限都按这个时区判定。
@@ -65,6 +76,22 @@ const CFG = {
   tzOffsetHours: parseInt(process.env.TZ_OFFSET_HOURS || '8', 10),
   mcpEnabled: (process.env.MCP_ENABLED || 'true') !== 'false',
   mcpPath: process.env.MCP_PATH || '/mcp',
+
+  // ── 重复抑制（见 lib/repeat-guard.js）────────────────────────────
+  // 同场景冷却：一个**持续状态**不该每 tick 都报一次。
+  // 0 = 关闭。只作用于触发侧（tick），不拦 surf 回投的产物。
+  actionCooldownMinutes: parseFloat(process.env.ACTION_COOLDOWN_MINUTES || '180'),
+  // 判定器去重窗口：工具轮里同一段对话只喂一次。0 = 关闭。
+  analyzeDedupSeconds: parseInt(process.env.ANALYZE_DEDUP_SECONDS || '900', 10),
+
+  // ── 骄傲防御：激活 find_activity 的 pride_block 通道 ──────────────
+  // vendor 默认 prideDefendThreshold = 1.0，是"永不触发"的哨兵值（connection 上限就是 1）
+  // → pride 永远不会因冷落升到 prideBlock(0.5) → find_activity 全天 0 次。
+  // 0.20 = observation 线，语义正好是"开始留意她，嘴硬就跟着升温"。
+  prideDefendThreshold: parseFloat(process.env.PRIDE_DEFEND_THRESHOLD || '0.20'),
+  // vendor 默认 0.003 在 c∈[0.35,0.50) 的窗口里涨不到 0.5（实测差 0.05），
+  // 必须 ≥0.004 才能在窗口关闭（c 越过强制线）之前把 pride 顶上去。见 _test/scan_activity.js。
+  prideDefendRate: parseFloat(process.env.PRIDE_DEFEND_RATE || '0.004'),
 
   // ── 自由冲浪（surf）──────────────────────────────────────────────
   // find_activity 越阈 → 先查静默时段/日上限 → 再 spawn 一次 surf。
@@ -179,6 +206,14 @@ try {
 // 详见 lib/loopback.js 顶部注释。
 const loopbackGuard = createLoopbackGuard();
 
+// ── 重复抑制 ──────────────────────────────────────
+// 冷却：一个持续状态别每 tick 报一次（find_activity 的常驻触发源）。
+// 去重：工具轮里 Operit 复用同一份 messages，同一段对话只该喂判定器一次。
+const actionCooldown = createSceneCooldown({ minutes: CFG.actionCooldownMinutes });
+const dialogDedup = createDialogDedup({ windowSeconds: CFG.analyzeDedupSeconds });
+// 去重跳过的日志只在同一轮打一次（工具可能连发多次请求）
+let _lastDedupSkipKey = null;
+
 // ── 积温实例（全局唯一）──────────────────────────
 const jiwen = createJiwen({
   getLastMessage: () => null, // 桥不依赖此回调，由判定器独立取历史
@@ -191,6 +226,10 @@ const jiwen = createJiwen({
     valenceSetpoint: CFG.valenceSetpoint,
     connectionAccel: CFG.connectionAccel,
     accelDelay: CFG.accelDelay,
+    // 骄傲防御：vendor 默认是"永不"的哨兵值，必须显式打开
+    // （否则 pride 升不到 prideBlock → find_activity 永不触发）。
+    prideDefendThreshold: CFG.prideDefendThreshold,
+    prideDefendRate: CFG.prideDefendRate,
   },
   verbose: false,
   onLog: (msg) => log('JIWEN', msg),
@@ -281,6 +320,16 @@ function extractRecentDialog(body, n) {
     out.push({ role: m.role, text: text.slice(0, 800) });
   }
   return out.reverse(); // 时间正序
+}
+
+// ── 判定器的轮次指纹：最后一条 user 的文本 ──────────
+// 工具轮里 Operit 复用同一份 messages 再发一次请求，这条一字未变；
+// 真出现新的一轮（她说了新话）它必变。用它挡掉重复判定，见 lib/repeat-guard.js。
+function dialogKeyOf(dialog) {
+  for (let i = dialog.length - 1; i >= 0; i--) {
+    if (dialog[i] && dialog[i].role === 'user') return String(dialog[i].text || '').trim().slice(0, 400);
+  }
+  return '';
 }
 
 // ── 转发到上游 ────────────────────────────────────
@@ -488,15 +537,29 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
     log('INFO', `inject=${injected} win=${req.headers['x-serein-window-id'] || 'main'}${loopTag}${skipTag} | ${jiwen.getStateSummary()}`);
 
     // ── 5. 异步喂判定器（不阻塞转发；仅真人开口才喂）──
+    // ⚠️ 必须按"轮次"去重：模型调工具后 Operit 会用同一份 messages 再发一次请求，
+    //    此时末 4 条 user/assistant 一字未变 → 判定器会把同一段对话判 N 次，
+    //    delta 叠加 N 次。（2026-10-07 实测同一轮判 4 次：pride 该掉 0.12 实际掉 0.66。）
+    //    原先靠 LLM_MIN_INTERVAL_SECONDS=20 挡，但工具轮间隔 33~49 秒，全部放行。
     if (!loopback && dialog.length >= 2 && CFG.llmKey) {
-      setImmediate(() => {
-        analyzeDialog(dialog, { ...CFG, log }).then((delta) => {
-          if (delta) {
-            jiwen.applyDelta(delta).catch((e) => log('WARN', 'applyDelta failed: ' + e.message));
-            log('INFO', 'delta applied: ' + JSON.stringify(delta));
-          }
-        }).catch((e) => log('WARN', 'analyzer failed: ' + e.message));
-      });
+      const dialogKey = dialogKeyOf(dialog);
+      if (!dialogDedup.accept(dialogKey)) {
+        // 同一轮只提示一次（工具可能连发多次）
+        if (dialogKey !== _lastDedupSkipKey) {
+          _lastDedupSkipKey = dialogKey;
+          log('INFO', 'analyzer skipped: dialog not advanced (tool turn, same last user msg)');
+        }
+      } else {
+        _lastDedupSkipKey = null;
+        setImmediate(() => {
+          analyzeDialog(dialog, { ...CFG, log }).then((delta) => {
+            if (delta) {
+              jiwen.applyDelta(delta).catch((e) => log('WARN', 'applyDelta failed: ' + e.message));
+              log('INFO', 'delta applied: ' + JSON.stringify(delta));
+            }
+          }).catch((e) => log('WARN', 'analyzer failed: ' + e.message));
+        });
+      }
     }
 
     // ── 6. 转发 ──
@@ -507,6 +570,16 @@ const server = http.createServer((req, res) => {  const u = new URL(req.url, 'ht
 // ── 主动唤醒定时器（tick + 阈值触发）──────────────
 let tickTimer = null;
 let _lastTickLog = 0;
+
+// 冷却跳过日志：一个持续状态会连续几十个 tick 都被挡，
+// 每 tick 打一条等于自己刷屏。同一场景每小时最多一条。
+const _cdLogAt = Object.create(null);
+function logCooldownSkip(scene) {
+  const now = Date.now();
+  if (_cdLogAt[scene] && (now - _cdLogAt[scene]) < 60 * 60 * 1000) return;
+  _cdLogAt[scene] = now;
+  log('INFO', `SKIP_ACTION=${scene} cooldown active (left ${Math.ceil(actionCooldown.remainingMinutes(scene))}min)`);
+}
 async function tickOnce() {
   try {
     const triggers = await jiwen.tick(CFG.tickMinutes);
@@ -524,11 +597,20 @@ async function tickOnce() {
     if (!CFG.proactiveEnabled) return;
     for (const t of actionable) {
       if (t.action === 'contact') {
+        // 冷却：contact 天然不重复（触发后 connection 归零），但"她整日不来"时
+        // 一天能触发 4 次以上，统一纳管避免与 find_activity 抢日上限时失去约束。
+        if (!actionCooldown.ok('contact')) { logCooldownSkip('contact'); continue; }
         const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
-        await fireProactive(notice, st, { scene: 'contact' });
-        // 开口 ≠ 被回复：部分缓解
+        const sent = await fireProactive(notice, st, { scene: 'contact' });
+        // ⚠️ 只有真投出去才记账：被静默时段/日上限挡掉的轮次不该吃掉冷却。
+        if (sent) actionCooldown.mark('contact');
+        // 开口 ≠ 被回复：部分缓解（原语义，不受投递成败影响）
         await jiwen.applyDelta({ connection: -0.35 });
       } else if (t.action === 'find_activity') {
+        // ⚠️ 冷却必须在这里判，且必须在 spawn 之前 ——
+        //   find_activity 的触发源是"惦记 + 嘴硬"这个持续状态，
+        //   状态不消失时每 tick 都会再判一次；不拦就是 50~110 条/天。
+        if (!actionCooldown.ok('find_activity')) { logCooldownSkip('find_activity'); continue; }
         // 桥不碰"活动"本身：不发英文活动枚举、不调 setActivity。
         // 只投一条独处通知，具体做什么由 Operit 侧工作流与模型自理。
         //
@@ -550,10 +632,14 @@ async function tickOnce() {
             continue;
           }
           spawnSurf(t.reason);
+          // spawn 即记账：surf 若超时/崩溃不会有 /surf/finding 回来，
+          // 不在这里记就会每个 tick 反复 spawn、反复烧模型钱。
+          actionCooldown.mark('find_activity');
           continue;
         }
         const notice = buildProactiveNotice(st, toneGrid, { scene: 'find_activity', reason: t.reason }, SCENE_OVERRIDE, PROACTIVE_OUTLET);
-        await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
+        const sent = await fireProactive(notice, st, { scene: 'find_activity', reason: t.reason });
+        if (sent) actionCooldown.mark('find_activity');
       }
     }
   } catch (e) {
@@ -620,19 +706,21 @@ function spawnSurf(reason) {
   });
 }
 
+// 返回 true = 真的投出去了；false = 被静默时段/日上限/形状守卫挡下。
+// 调用方用它决定要不要记冷却账 —— 被挡的轮次不该吃掉冷却。
 async function fireProactive(notice, state, meta) {
   if (inQuietHours()) {
     log('INFO', `proactive blocked by quiet hours (local_hour=${clock.localHour()}, quiet=${CFG.quietStart}-${CFG.quietEnd})`);
-    return;
+    return false;
   }
-  if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return; }
+  if (!checkDailyLimit()) { log('INFO', 'proactive blocked by daily limit'); return false; }
 
   // 同样的跨系统契约：通知最终会经 Operit 落进对话、再回流到 Serein 的归档路径。
   // 末行不对 → 它后面她的话会被整段吞掉。形状不合规就不发。
   const shapeProblems = assertBlockShape(notice);
   if (shapeProblems.length) {
     log('ERROR', 'proactive notice shape invalid, not sent: ' + shapeProblems.join(' | '));
-    return;
+    return false;
   }
 
   sendCountToday++;
@@ -661,7 +749,7 @@ async function fireProactive(notice, state, meta) {
 
   // ── 投递路径 2（可选）：webhook 直推 ──
   // 仅在用户确认 Operit 有对外 POST 入口时才配 PROACTIVE_WEBHOOK。
-  if (!CFG.proactiveWebhook) return;
+  if (!CFG.proactiveWebhook) return true;
   try {
     const u = new URL(CFG.proactiveWebhook);
     const lib = u.protocol === 'https:' ? https : http;
@@ -684,6 +772,7 @@ async function fireProactive(notice, state, meta) {
   } catch (e) {
     log('ERROR', 'proactive webhook failed: ' + e.message);
   }
+  return true;
 }
 
 // ── MCP 服务（给 Operit 工作流"拉"通知用）─────────
@@ -702,6 +791,12 @@ const mcp = CFG.mcpEnabled ? createMcpHandler({
     daily_limit: CFG.proactiveMaxPerDay,
     inject_enabled: CFG.injectEnabled,
     tick_minutes: CFG.tickMinutes,
+    // 排查"为什么该有动静却没有"用：冷却期内触发会被静默丢弃。
+    action_cooldown_minutes: CFG.actionCooldownMinutes,
+    cooldown_left_minutes: {
+      contact: Math.ceil(actionCooldown.remainingMinutes('contact')),
+      find_activity: Math.ceil(actionCooldown.remainingMinutes('find_activity')),
+    },
   }),
   log,
 }) : null;
@@ -716,6 +811,11 @@ const mcp = CFG.mcpEnabled ? createMcpHandler({
     log('INFO', `bridge listening on ${CFG.host}:${CFG.port} → ${CFG.upstreamBase}`);
     log('INFO', `inject=${CFG.injectEnabled} proactive=${CFG.proactiveEnabled} tick=${CFG.tickMinutes}min` +
       ` surf=${CFG.surfEnabled ? CFG.surfDir : 'off'}`);
+    log('INFO', `proactive: max=${CFG.proactiveMaxPerDay}/day quiet=${CFG.quietStart}-${CFG.quietEnd}` +
+      `(tz+${CFG.tzOffsetHours}) cooldown=${CFG.actionCooldownMinutes}min` +
+      ` analyzerDedup=${CFG.analyzeDedupSeconds}s`);
+    log('INFO', `prideDefend: threshold=${CFG.prideDefendThreshold} rate=${CFG.prideDefendRate}` +
+      ` (vendor 默认 1.0/0.003 = find_activity 永不触发)`);
     if (mcp) log('INFO', `MCP endpoint: http://${CFG.host}:${CFG.port}${CFG.mcpPath} (Streamable HTTP, 3 tools)`);
   });
   // SSE 长连接需要无限期保持；HTTP 层其余超时对短请求无意义。

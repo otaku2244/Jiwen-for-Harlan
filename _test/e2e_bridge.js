@@ -102,6 +102,10 @@ function check(name, cond, detail) {
     'TICK_MINUTES=5',
     'INJECT_THROTTLE_SECONDS=0',
     'PROACTIVE_ENABLED=false',
+    // ⚠️ 判定器自带限流（默认 20s 一条 + 熔断），连发用例会被静默拦掉、
+    //    表现为「llmCalled 不涨」而不是报错。测试必须置 0。见 lib/analyzer.js。
+    'LLM_MIN_INTERVAL_SECONDS=0',
+    'LLM_BREAKER_SECONDS=0',
   ].join('\n');
   fs.writeFileSync(ENV_PATH, env, 'utf8');
   const child = spawn(process.execPath, [path.join(ROOT, 'bridge.js')], {
@@ -157,6 +161,32 @@ function check(name, cond, detail) {
   check('开局状态为中性而非低谷（NEUTRAL_SEED 生效）',
     lastMsg && lastMsg.content.includes('心情：中性'),
     lastMsg ? (lastMsg.content.match(/心情：[^。]*。/) || [''])[0] : '');
+
+  // ── 用例 3b：判定器按「轮次」去重（工具轮）──
+  // 模型调工具后 Operit 会用**同一份 messages** 再发一次请求。
+  // 不去重 → 判定器把同一段对话判 N 次、delta 叠 N 次
+  //（2026-10-07 线上实测同一轮判 4 次：pride 该掉 0.12 实际掉 0.66）。
+  await wait(900);                       // 等用例 3 的异步判定跑完
+  const llmBaseline = llmCalled;
+
+  await req(BRIDGE_PORT, '/v1/chat/completions', payload, {
+    authorization: 'Bearer test-token-at-least-24-chars-abcdef',
+    'x-serein-window-id': 'operit',
+  });
+  await wait(900);
+  check('同一份 messages 重发 → 判定器不再被喂（工具轮去重）',
+    llmCalled === llmBaseline, `baseline=${llmBaseline} now=${llmCalled}`);
+
+  // 她说了新话 → 必须放行
+  const payload2 = JSON.parse(JSON.stringify(payload));
+  payload2.messages[3] = { role: 'user', content: '算了 你先忙' };
+  await req(BRIDGE_PORT, '/v1/chat/completions', payload2, {
+    authorization: 'Bearer test-token-at-least-24-chars-abcdef',
+    'x-serein-window-id': 'operit',
+  });
+  await wait(900);
+  check('她说了新话 → 判定器被喂（去重不误杀新一轮）',
+    llmCalled > llmBaseline, `baseline=${llmBaseline} now=${llmCalled}`);
 
   // ── 用例 4：判定器被调用 & delta 应用 ──
   await wait(1200);

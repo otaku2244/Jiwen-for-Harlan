@@ -376,7 +376,7 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 |---|---|---|
 | `contact` | `c ≥ 0.35` | `resetConnection` 归零后爬 **399 分钟 ≈ 6.7 h** |
 | 自我调节 → `find_activity` | `arousal ≥ 0.70` | 0.7 回归到 0 只要 **140 分钟 ≈ 2.3 h** |
-| 开口 → `find_activity(pride_block)` | `c ≥ 0.35` **且** `p ≥ 0.50` | `prideRegress=0.003/min` → 6.7 h 内 p 必归 0，**不可达** |
+| 开口 → `find_activity(pride_block)` | `c ≥ 0.35` **且** `p ≥ 0.50` | 本次实测时**不可达** —— 该路前提是 `prideDefendThreshold` 打开，而 vendor 默认给的是 `1.0`（哨兵值＝永不）。**2026-10-07 桥已显式打开（0.20 / 0.004），这条路已通，"两闸门互斥"的结论随之失效，已重测**（见下方 10-07 补测）。 |
 
 铁证：**`contact` 触发那一刻的 `arousal` 恒为 `0.00`**（2016 个 tick 无一例外）。
 另外 `valenceActivity` 的 vendor 默认阈值就是 `-1.0`（注释明写"=-1.0 即永不"），
@@ -395,6 +395,26 @@ StreamableHttpError: Maximum reconnection attempts exceeded
   是 `return` 早退、通知根本没投出去。7 天里 14 次 contact 有 7 次落在静默时段。
   效果上把早晨那次唤醒从 ~03:10 推到 ~09:50 —— 结果可能是想要的，但是**顺带**达成的。
   **当前未改。**
+
+#### 🔁 2026-10-07 补测：`find_activity` 打开后，混合场景队列出现了
+
+打开骄傲防御后 `find_activity` 变得频繁，`_test/probe_supersede.js` 同步了新参数
+（`prideDefendThreshold=0.20 / prideDefendRate=0.004`）、同场景冷却（180 min）与日上限（8）后重跑 7 天：
+
+| 场景 | 投递策略 | contact 送达 | find_activity 送达 | 队列最大 | LIFO 丢掉更早的 contact |
+|---|---|---|---|---|---|
+| Operit 每 30 分钟拉一次（**实际配置**） | FIFO 取最旧 | 7 | 15 | **1** | 0 |
+| 同上 | LIFO 取最新（**现行**） | 7 | 15 | 1 | **0** |
+| Operit 每 8 小时才拉（手机长时间离线） | FIFO 取最旧 | 6 | 8 | 2 | 0 |
+| 同上 | LIFO 取最新（**现行**） | **0** | 14 | 2 | **6** |
+
+**结论**：实际配置（30 分钟一拉）下队列从不超过 1 条，两种策略完全等价 —— **LIFO 没有引入问题**。
+只有手机离线到小时级时，队列才会同时压着 `[contact@t1, find_activity@t2]`（t2 比 t1 晚约 165 分钟，
+因为 contact 触发后 connection 归零，要再爬 2.7 h 才够得着 find_activity 的线），
+此时 LIFO 会投 `find_activity` 而丢掉更早的 `contact`。
+
+⚠️ 那 6 条被丢的 contact 滞后均值 191 分钟、**全部属于"投出时她已经开过口、前提已作废"**，
+所以损失有限。**当前保留 LIFO 不改**；若要更保险，可改为"队列里有 contact 就优先投最新那条 contact"。
 
 ### Operit 侧怎么接
 
@@ -838,6 +858,9 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 独处场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
+| **角色"自己去干活"（`find_activity`）的活跃度** | `.env` 的 `PRIDE_DEFEND_THRESHOLD` / `PRIDE_DEFEND_RATE`（见下方"十·补"） |
+| 同一场景多久内不重复报 | `.env` 的 `ACTION_COOLDOWN_MINUTES`（默认 180） |
+| 判定器重复喂的抑制窗口 | `.env` 的 `ANALYZE_DEDUP_SECONDS`（默认 900） |
 | 注入块里显示什么 | `lib/inject-text.js` |
 | 注入节流（多久重注一次） | `bridge.js` 的 `shouldInject` / `.env` 的 `INJECT_THROTTLE_SECONDS` |
 | MCP 工具的描述或返回值 | `lib/mcp.js` 的 `buildToolDefs` / `callTool` |
@@ -846,3 +869,95 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 验 MCP 协议是否正常 | `node _test/mcp_check.js`（57 例，不起真桥） |
 
 **校准方法**：跑两天，翻 `bridge.log`，找那些"这句语气不对"的地方，看当时 `[TICK]` 行的五轴值落在哪一档，改对应的格子。改完跑 `node _test/build_prompt_html.js` 重新生成清单对照。
+
+---
+
+## 十·补、`find_activity`（独处）此前为何永远不触发，以及怎么打开的
+
+> 2026-10-07。线上跑了一整天，`contact` 触发 2 次、**`find_activity` 0 次**。
+> 这不是部署问题，是**引擎里通往 `find_activity` 的每一条路，默认都用"哨兵值"关着**。
+
+### 五条路，四条出厂即死
+
+| 路径 | 参数 | vendor 默认 | 效果 |
+|---|---|---|---|
+| `pride_block`（惦记 + 嘴硬 → 转身找事做） | `prideDefendThreshold` | **1.0** | connection 上限就是 1 → **永不触发** |
+| `low_valence`（心情差自我调节） | `valenceActivity` | **-1.0** | valence 下限就是 -1 → **永不触发** |
+| `high_arousal`（躁动坐不住） | `arousalAgitation` | 0.7 | 开着，但日常到不了（实测 arousal 峰值 ≈ 0） |
+| 辅助：想念久了心情下沉 | `valenceConnectionDriftRate` | **0** | 关闭 |
+| 辅助：等待焦躁 | `arousalConnectionRiseThreshold` | **1.0** | **永不触发** |
+
+作者用的是 opt-in 设计：把门槛设成"轴的理论边界"来当"永不"。桥原先只传 3 个 `rates`
+（`valenceSetpoint` / `connectionAccel` / `accelDelay`）、0 个 `thresholds`，
+所以引擎一直跑在"几乎全关"的默认态。
+
+**关键因果链**：`prideDefendThreshold` 关着 → pride 永远不会因冷落升到 `prideBlock`(0.5)
+→ `c` 涨到 0.35 时 `p` 恒为 0 → 全部走 `contact`。这就是 0 次的全部原因。
+
+### 打开方式（全部走 `createJiwen(opts)`，**vendor 零改动**）
+
+| `.env` | 默认 | 说明 |
+|---|---|---|
+| `PRIDE_DEFEND_THRESHOLD` | `0.20` | 原是 1.0。0.20 = `observation` 线，语义"一开始留意她，嘴硬就跟着升温" |
+| `PRIDE_DEFEND_RATE` | `0.004` | 原是 0.003。**这个值改不得** —— 0.003 在 `c∈[0.35,0.50)` 的窗口里只能把 pride 涨 0.45，差 0.05 够不到 0.5，`find_activity` 仍不触发 |
+
+### ⚠️ 必须配套"同场景冷却"，否则打开就是灾难
+
+`find_activity` 的触发源是**持续状态**（惦记 + 嘴硬），能连续挂 1~2 小时，
+而 tick 每 5 分钟判一次 —— **不加冷却就是 51~110 条/天**，日上限瞬间打光，
+连带把 `contact` 一起挡在门外。
+
+```bash
+ACTION_COOLDOWN_MINUTES=180   # 同场景 3 小时内不重复触发；0 = 关闭
+```
+
+实测（`_test/scan_activity.js`，30 天 × 她三种出现模式）：
+
+| 配置 | 她来2次/日 | 她来1次/日 | 整日不来 |
+|---|---|---|---|
+| 现状（全关） | contact 2.00 / find **0.00** | 3.00 / **0.00** | 3.60 / **0.00** |
+| 只打开骄傲防御（无冷却） | 1.97 / **51.70** | 2.97 / 83.47 | 4.30 / 110.03 |
+| **+ 180 分钟冷却（现行）** | **1.97 / 2.00** | **2.97 / 3.97** | **4.30 / 4.33** |
+
+顺带把日上限从 6 提到 **8**：整日不来时 4.30 + 4.33 ≈ 8.6 会顶满，留在 6 会把
+`find_activity` 挤到 2 次以下。
+
+### 副作用（要知情）
+
+她一走约 2 小时后，pride 会涨到 0.5 并**保持到下次出现** → 45 格长期取"端着"那一列。
+符合人设，但这是新状态。
+
+### 冷却只作用于**触发侧**
+
+`tickOnce` 里判，`_test/scan_activity.js` 同款逻辑。**不拦投递侧** ——
+surf 跑完回投的产物照常发；否则 spawn 那一刻已记账，surf 回来必然还在冷却内，产物全被吃掉。
+同理 `bridge.js` 的 `fireProactive` 被静默时段/日上限挡下时**不记账**（`if (sent) mark`），
+不然"夜里被静默挡掉"会白白吃掉一次冷却。
+
+---
+
+## 十·再补、判定器被同一轮对话重复喂（2026-10-07 实测）
+
+工具轮里模型调完工具，Operit 会用**同一份 messages** 再发一次请求 ——
+`extractRecentDialog(body, 4)` 取的最后 4 条 `user`/`assistant` **一字未变**，
+于是判定器把同一段对话判 N 次、`delta` 叠加 N 次。
+
+线上实测：`08:45:43 / 08:47:15 / 09:01:42 / 09:02:56` 四次 `delta applied` **逐字相同**
+（`{"pride":-0.12,"valence":0.08,"arousal":-0.1,"connection":-0.15}`）。
+后果：pride 该掉 0.12、实际掉 0.66（放大 5.5 倍），**整条轴轨迹被污染**。
+
+原先靠 `LLM_MIN_INTERVAL_SECONDS=20` 挡，但实测工具轮间隔 33/36/33/49 秒，**全部放行**。
+
+修法（`lib/repeat-guard.js` 的 `createDialogDedup`）：取**最后一条 user 文本**做轮次指纹，
+窗口内同指纹只喂一次；`ANALYZE_DEDUP_SECONDS` 默认 900（TTL 兜底：
+同一句话隔久了又出现仍应重新判）。
+`_test/e2e_bridge.js` 已加两个用例：同一份 messages 重发 → 判定器不涨；
+她说了新话 → 判定器必涨。
+
+### ⚠️ 顺带修掉一个静默失效：`.env` 加载顺序
+
+`lib/analyzer.js` 在**模块顶层**读 `process.env.LLM_MIN_INTERVAL_SECONDS` /
+`LLM_BREAKER_SECONDS` 并算成常量，而 `bridge.js` 原先把 `loadEnvFile(...)` 写在
+`require('./lib/analyzer.js')` **之后** → 这两项配置**从来没生效过**（永远走默认 20s/300s）。
+现已把 `loadEnvFile` 提到所有 lib require 之前。
+**若你此前在 `.env` 里写过这两项、却发现行为没变，就是这个原因。**
