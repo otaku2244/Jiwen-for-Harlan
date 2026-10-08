@@ -200,6 +200,12 @@ const r3 = (x) => Math.round(x * 1000) / 1000;
   check('C5 注释里写明了「阈值必须 ≥ valenceSetpoint」这个耦合',
     /必须 \*\*≥ valenceSetpoint|阈值必须/.test(src));
 
+  // C6/C7 —— 2026-10-08 在 VPS 上热修但没进版本库的那两处，补一条防回退
+  check('C6 spawnSurf 用 CFG.surfNodeBin（不用 process.execPath）',
+    /spawn\(CFG\.surfNodeBin/.test(code) && !/spawn\(process\.execPath/.test(code));
+  check('C7 surf 子进程显式覆盖 STATE_FILE / LLM_DISABLE_THINKING（否则 loadDotEnv 静默失效）',
+    /STATE_FILE:\s*path\.join\(CFG\.surfDir/.test(code) && /LLM_DISABLE_THINKING:\s*'true'/.test(code));
+
   // ══════════ 汇总 ══════════
   const bad = results.filter((r) => !r.ok);
   console.log('\n' + (results.length - bad.length) + '/' + results.length + ' 通过');

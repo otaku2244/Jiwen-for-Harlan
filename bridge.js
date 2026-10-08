@@ -127,6 +127,10 @@ const CFG = {
   surfEnabled: (process.env.SURF_ENABLED || 'false') === 'true',
   surfDir: process.env.SURF_DIR || '/root/proactive-web-surf-agent/v2',
   surfEntry: process.env.SURF_ENTRY || 'dist/index.js',
+  // surf 子进程用哪个 node 跑。**不能用 process.execPath** —— 桥自己是被
+  // systemd 拉起来的，那个 node 未必是 surf 需要的那个（surf 是 TS 编译产物，
+  // 带自己的 node_modules）。2026-10-08 在 VPS 上热修过，此处补回版本库。
+  surfNodeBin: process.env.SURF_NODE_BIN || '/usr/local/bin/node',
   surfTimeoutMs: parseInt(process.env.SURF_TIMEOUT_MS || '180000', 10),
   surfFindingPath: process.env.SURF_FINDING_PATH || '/surf/finding',
   // ── 活动登记（描述层段4 的真来源）─────────────────────────────
@@ -774,11 +778,16 @@ function spawnSurf(reason) {
   }
   surfInFlight = true;
   log('INFO', `surf spawning (reason=${reason || 'unknown'}, entry=${entry})`);
-  const child = spawn(process.execPath, [entry, '--once'], {
+  const child = spawn(CFG.surfNodeBin, [entry, '--once'], {
     cwd: CFG.surfDir,
     // 关键：surf 必须走 jiwen 通道回投，且不能自主排期（那是 --once 保证的）。
     env: {
       ...process.env,
+      // 显式覆盖：桥的 .env 里也有 STATE_FILE / LLM_DISABLE_THINKING，
+      // 经 ...process.env 传进来会让 surf 侧的 loadDotEnv 静默失效
+      //（surf 只在 process.env[key] === undefined 时才赋值）。
+      STATE_FILE: path.join(CFG.surfDir, 'data', 'state.json'),
+      LLM_DISABLE_THINKING: 'true',
       AUTO_SCHEDULE: 'false',
       DELIVERY_CHANNEL: 'jiwen',
       JIWEN_BASE_URL: `http://127.0.0.1:${CFG.port}`,
