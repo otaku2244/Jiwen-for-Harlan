@@ -1,5 +1,5 @@
 node_modules/
 .env
 data/
-_test/.run/
+_test/.run*/
 *.log

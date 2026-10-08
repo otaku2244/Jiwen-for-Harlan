@@ -605,11 +605,18 @@ StreamableHttpError: Maximum reconnection attempts exceeded
 - **投递滞后均值 17.5 分钟**（最大 20 分钟 = poll 间隔）。拆开看：`contact` 7/7 都在
   她还沉默时投出（正确）；`find_activity` 7/7 都在她已经开口之后才投出 —— 这是
   "她那句话让他不好受 → 他自己去消化"的自然结果，不是缺陷。
-- ⚠️ **静默时段的 `contact` 触发照样扣 `-0.35`**：`bridge.js` 里 `await fireProactive(...)`
-  之后**无条件** `applyDelta({connection:-0.35})`，而 `fireProactive` 在静默/超日限时
-  是 `return` 早退、通知根本没投出去。7 天里 14 次 contact 有 7 次落在静默时段。
-  效果上把早晨那次唤醒从 ~03:10 推到 ~09:50 —— 结果可能是想要的，但是**顺带**达成的。
-  **当前未改。**
+- ✅ **静默/超日限时的 `contact` 触发照样扣 `-0.35`**（**2026-10-09 已修**）：
+  `bridge.js` 里 `await fireProactive(...)` 之后曾**无条件** `applyDelta({connection:-0.35})`，
+  而 `fireProactive` 在静默/超日限/形状不合规时是 `return false` 早退、通知根本没投出去。
+  7 天里 14 次 contact 有 7 次落在静默时段。代价在凌晨最明显：静默 8 小时里每个 tick
+  （5min）都触发一次 contact、扣一次，c 被逐 tick 归零，"攒了一夜"的手感被抹平，
+  醒来时状态是空的。
+  现改为 `if (sent) { mark(); applyDelta(); }` —— **没说出口 = 没释放**，
+  且记账与缓解同进同出（两者必须在一个块里，别只挪一个）。
+  连带效果：以前"早晨那次唤醒被推到 ~09:50"是**顺带**达成的，现在是**正着**达成的
+  —— c 一路攒到静默解除，第一个 tick 就找他，频次由日上限兜住。
+  回归：`_test/contact_relief_check.js`（13 例；跨进程实证「投出→释放」与
+  「被挡→不释放」两支，另含源码断言，防止后人把 `applyDelta` 挪回 `if (sent)` 之外）。
 
 #### 🔁 2026-10-07 补测：`find_activity` 打开后，混合场景队列出现了
 
@@ -704,7 +711,8 @@ if (!loopback && !connectionHandled) replyRelief('not analyzed');  // 没判成 
 明写「她一开口，最后那点耐性自己就用完了」「她终于回话了。隔了这么久…」，
 而回环时她一个字都没说。另叠一层数值冲突：`fireProactive` 投递后**立刻**
 `applyDelta({connection:-0.35})`，于是**通知是衰减前的快照、此刻块是衰减后的**，
-同一条消息里两个 connection 值。
+同一条消息里两个 connection 值。（2026-10-09 起该扣减只在 `sent === true` 时执行；
+回环命中恰恰证明通知真投出去了，所以这层冲突不变。）
 
 实测对照见 `_test/dump_loopback_collision.js`（三场景渲染）；三个场景的原文差异
 比"文字重复"严重得多 —— 一块说「表达照常…可以顺口调侃一句」，另一块说
@@ -1087,6 +1095,7 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 独处场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
+| `contact` 开口后释放多少 `connection`、什么时候释放 | `bridge.js` 的 contact 分支（`-0.35`，**只在 `sent === true` 时执行** —— 静默/超日限/形状不合规被挡下的轮次不释放）。⚠️ 这个值与 `.env` 的 `CONNECTION_RELIEF` 是**两条互不重叠**的支路（那个管"判定器没跑成"的兜底），别合并成一个键 |
 | **角色"自己去干活"（`find_activity`）的活跃度** | 走「低情绪」通道时：`.env` 的 `VALENCE_ACTIVITY_THRESHOLD` + `ACTIVITY_CONNECTION_RELIEF`；走「嘴硬」通道时：`PRIDE_DEFEND_THRESHOLD` / `PRIDE_DEFEND_RATE`。两通道**二选一**，见「二之二 · 补四」 |
 | **「冲浪 vs 找你」的配比** | `.env` 的 `ACTIVITY_CONNECTION_RELIEF`（冲浪压低 c → 抑制找你）。实测 0 → 4:4，0.10 → 6:2 |
 | 同一场景多久内不重复报 | `.env` 的 `ACTION_COOLDOWN_MINUTES`（2026-10-09 起默认 **60**；≥120 会让冲浪:找你 掉回 4:4） |

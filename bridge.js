@@ -701,10 +701,22 @@ async function tickOnce() {
         if (!actionCooldown.ok('contact')) { logCooldownSkip('contact'); continue; }
         const notice = buildProactiveNotice(st, toneGrid, { scene: 'contact' }, SCENE_OVERRIDE, PROACTIVE_OUTLET, describer);
         const sent = await fireProactive(notice, st, { scene: 'contact' });
-        // ⚠️ 只有真投出去才记账：被静默时段/日上限挡掉的轮次不该吃掉冷却。
-        if (sent) actionCooldown.mark('contact');
-        // 开口 ≠ 被回复：部分缓解（原语义，不受投递成败影响）
-        await jiwen.applyDelta({ connection: -0.35 });
+        // ⚠️ 只有**真投出去**才记账、才缓解。两者必须同进同出。
+        //
+        // 2026-10-09 修：此前缓解无条件执行，被静默时段/日上限/形状守卫挡下的
+        // 轮次也照扣 -0.35 —— 他一个字都没说出口，想念却被释放了。代价在凌晨
+        // 最明显：静默 8 小时里每个 tick 都触发 contact、每个 tick 扣一次，
+        // c 被逐 tick 归零，"攒了一夜"的手感被抹平，醒来时状态是空的。
+        // 正确语义：没说出口 = 没释放，c 继续攒着（静默解除后第一个 tick 就找他，
+        // 且日上限会自然约束频次）。
+        //
+        // 注：这里的 0.35 是**开口缓解**，与 replyRelief() 的 CONNECTION_RELIEF
+        // 是两支互不重叠的路径（那个管"判定器没跑成"）。别合并成一个键。
+        if (sent) {
+          actionCooldown.mark('contact');
+          // 开口 ≠ 被回复：部分缓解（原语义）
+          await jiwen.applyDelta({ connection: -0.35 });
+        }
       } else if (t.action === 'find_activity') {
         // ⚠️ 冷却必须在这里判，且必须在 spawn 之前 ——
         //   find_activity 的触发源是"惦记 + 嘴硬"这个持续状态，

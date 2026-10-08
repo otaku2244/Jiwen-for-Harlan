@@ -189,7 +189,9 @@ ok('C9 dialogKeyOf 已定义', /function dialogKeyOf\(dialog\)/.test(src));
 ok('C11 fireProactive 有 return false', /async function fireProactive[\s\S]{0,900}return false;/.test(src));
 ok('C12 fireProactive 有 return true', /async function fireProactive[\s\S]{0,4000}return true;\s*\n\}/.test(src));
 // 且调用方按返回值记账
-ok('C13 调用方按 sent 记账 (contact)', src.includes("if (sent) actionCooldown.mark('contact');"));
+// （2026-10-09：contact 那一处从单行展开成了块 —— 因为 applyDelta 也一并
+//   挪进了 sent 保护内，见 _test/contact_relief_check.js。断言改用正则。）
+ok('C13 调用方按 sent 记账 (contact)', /if \(sent\) \{\s*actionCooldown\.mark\('contact'\);/.test(src));
 ok('C14 调用方按 sent 记账 (find_activity)', src.includes("if (sent) actionCooldown.mark('find_activity');"));
 
 // 引擎参数：骄傲防御必须传进 rates（vendor 默认是"永不"的哨兵值）
