@@ -98,6 +98,29 @@ const CFG = {
   // 必须 ≥0.004 才能在窗口关闭（c 越过强制线）之前把 pride 顶上去。见 _test/scan_activity.js。
   prideDefendRate: parseFloat(process.env.PRIDE_DEFEND_RATE || '0.004'),
 
+  // ── 低情绪自我调节通道：find_activity 的第二入口（2026-10-09）──────
+  // find_activity 有两条独立入口：
+  //   ① 「嘴硬」 c∈[0.35,0.50) 且 pride≥0.5（pride_block）
+  //   ② 「心情低」valence ≤ valenceActivity 且 immersion<0.3（low_valence）
+  // ② **完全不看 connection**（vendor/jiwen.js:507）。
+  //
+  // vendor 把 ② 的阈值默认成 -1.0（永不触发），于是 find_activity 只能靠 ①。
+  // 而 ① 要求 pride 长期顶格 0.5 —— 实测她整日不出现时，pride≥0.5 占醒着的
+  // **80%** 时间，描述层第 2 段被钉死在同一档（文案不流动）。
+  //
+  // 打开 ② 之后冲浪改由「心情低 + 一个人」驱动，与 connection / pride 解耦：
+  // pride 交还给判定器 → 描述层恢复流动；c 也不再被 pride 绑架。
+  //
+  // ⚠️ 阈值必须 **≥ valenceSetpoint** 才会常态成立（同一个坐标系里的两个数，
+  //    改一个必须回头看另一个）。默认 -0.04 比 setpoint(-0.05) 高 0.01。
+  valenceActivityThreshold: parseFloat(process.env.VALENCE_ACTIVITY_THRESHOLD || '-1.0'),
+  // vendor 原生的「做事情能部分缓解连接需求」（默认 0 = 关）。
+  // 打开后每次冲浪把 connection 往下压一点 → contact 被自然抑制，
+  // 「冲浪多于找你」不必再靠 pride 顶格来实现。
+  // ⚠️ vendor 只在**活动类型变化**时才扣（同类型连续冲浪不重复扣），
+  //    且有 0.01 下限（防止清零导致阈值永不触达）。
+  activityConnectionRelief: parseFloat(process.env.ACTIVITY_CONNECTION_RELIEF || '0'),
+
   // ── 自由冲浪（surf）──────────────────────────────────────────────
   // find_activity 越阈 → 先查静默时段/日上限 → 再 spawn 一次 surf。
   // 闸门必须在 spawn **之前**：先跑再判等于白烧一次模型钱，且"没开口也算了缓解"。
@@ -260,6 +283,12 @@ const jiwen = createJiwen({
     // （否则 pride 升不到 prideBlock → find_activity 永不触发）。
     prideDefendThreshold: CFG.prideDefendThreshold,
     prideDefendRate: CFG.prideDefendRate,
+    // 活动缓解：冲浪本身会压低 connection（vendor 原生，默认 0=关）
+    activityConnectionRelief: CFG.activityConnectionRelief,
+  },
+  thresholds: {
+    // 低情绪自我调节通道的阈值（≥ valenceSetpoint 才会常态成立）
+    valenceActivity: CFG.valenceActivityThreshold,
   },
   verbose: false,
   onLog: (msg) => log('JIWEN', msg),

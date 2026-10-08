@@ -200,6 +200,71 @@ vendor/jiwen.js:277   // 连接需求降幅现由外部 LLM 分析（如 analyze
 
 ---
 
+### 二之二 · 补四：她不在时的节奏 —— 从「嘴硬」通道切到「低情绪」通道（2026-10-09）
+
+**问题**：她彻底安静后，桥要 **6h40** 才产出第一个动作，而且动作是「冲浪」而非「找你」
+（用户想要的是反过来的量级：冲浪要多于找你，但不能等这么久）。
+
+**先撞上一个反直觉的事实**：把 `CONNECTION_RATE` 提上去，`contact`（找你）反而更容易赢。
+
+```
+find_activity 的条件（走「嘴硬」通道时）:  c ∈ [0.35, 0.50) 且 pride ≥ 0.5
+contact 的条件:                          c ∈ [0.35, 0.50) 且 pride < 0.5，或 c ≥ 0.50
+```
+
+`pride` 要爬到 0.5 需要固定时间（`prideDefendRate` 决定）。c 涨得越快，就越容易**抢在 pride 顶格之前**
+先越过 0.35 → 直接走成 contact。24h 模拟（她完全消失、含凌晨静默）实测：
+
+| CONNECTION_RATE | 首个动作 | 冲浪 : 找你 |
+|---|---|---|
+| 0.0007（原值） | 6h40 | 3 : 2 |
+| 0.002 | 2h25 | **2 : 5**（掉头） |
+| 0.003 | 1h35 | **1 : 6** |
+
+而如果靠调高 `prideDefendRate` 把「嘴硬」通道焊死，代价是：**`pride ≥ 0.5` 占醒着时间的 80%**，
+描述层第 2 段被钉死在同一档、文案不再流动。
+
+**解法：换一条入口。** 引擎里 `find_activity` 有**两条互不相干**的入口（`vendor/jiwen.js:507`）：
+
+| 入口 | 条件 | 看 connection？ |
+|---|---|---|
+| ① 嘴硬（pride_block） | `c ∈ [0.35,0.50)` 且 `pride ≥ 0.5` | 是 |
+| ② 低情绪（low_valence） | `valence ≤ valenceActivity` 且 `immersion < 0.3` | **否** |
+
+vendor 把 ② 的阈值默认成 `-1.0`（永不触发），所以此前只能走 ①。打开 ② 之后：
+
+- 冲浪改由「心情低 + 一个人」驱动，与 `connection` / `pride` **解耦**
+- `pride` 交还给判定器 → 描述层恢复流动（实测 `pride ≥ 0.5` 占比 **0%**）
+- `connection` 不再被 pride 绑架，回到纯「想念」语义
+- 她转身上网后，第一个动作从 6h40 提前到 **10 分钟**内
+  （真实场景里她刚说完话，valence 会被判定器先抬起来，回归到触发线约需 30 分钟）
+
+配套打开 vendor 原生的**活动缓解** `activityConnectionRelief`：冲浪本身会压低 `connection`，
+`contact` 被自然抑制，「冲浪多于找你」不必再靠 pride 顶格实现。
+
+| 参数 | 原值 | 新值 | 作用 |
+|---|---|---|---|
+| `CONNECTION_RATE` | 0.0007 | **0.0025** | 她不在时 c 的累积速率 |
+| `PRIDE_DEFEND_THRESHOLD` | 0.20 | **1.0**（关） | 关掉「嘴硬」通道，pride 交还判定器 |
+| `VALENCE_ACTIVITY_THRESHOLD`（新） | -1.0 | **-0.04** | 打开「低情绪」通道 |
+| `ACTIVITY_CONNECTION_RELIEF`（新） | 0 | **0.10** | 冲浪反过来压 c |
+| `ACTION_COOLDOWN_MINUTES` | 180 | **60** | 冷却 ≤90 才有 6:2；≥120 掉回 4:4 |
+| `PROACTIVE_MAX_PER_DAY` | 8 | 8（不动） | 冲浪 + 找你共用 |
+
+最终 24h 实测：**冲浪 6 : 找你 2**，首个动作 10 分钟，`c ≥ 0.20` 占醒着时间 39%（原 84%）。
+
+⚠️ 两个容易踩的坑：
+
+1. `VALENCE_ACTIVITY_THRESHOLD` **必须 ≥ `VALENCE_SETPOINT`** 才会常态成立 ——
+   两个数在同一个坐标系里（默认 -0.04 vs -0.05），改一个必须回头看另一个。
+2. `activityConnectionRelief` 只在**活动类型变化**时扣（同类型连续冲浪不重复扣），
+   且有 `0.01` 下限（防止清零导致阈值永不触达）。
+
+**vendor 一行未动**：两处都是 `bridge.js` 把 `thresholds` / `rates` 传进 `createJiwen` 的既有接口。
+回归：`_test/valence_channel_check.js`（16 例，三层：通道行为 / 缓解规则 / 接线断言）。
+
+---
+
 ## 二之三、注入块形态（统一骨架）
 
 两种投递形态共用同一骨架，只差正文来源：
@@ -1022,8 +1087,9 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 | 独处场景的正文 | `config/tone-harlan.json` 的 `sceneOverride` |
 | 判定标准（什么算冒犯、什么算示弱） | `config/analyze-prompt-user.txt` |
 | 主动唤醒的早晚/频率 | `.env` 的 `CONNECTION_RATE` / `PROACTIVE_MAX_PER_DAY` |
-| **角色"自己去干活"（`find_activity`）的活跃度** | `.env` 的 `PRIDE_DEFEND_THRESHOLD` / `PRIDE_DEFEND_RATE`（见下方"十·补"） |
-| 同一场景多久内不重复报 | `.env` 的 `ACTION_COOLDOWN_MINUTES`（默认 180） |
+| **角色"自己去干活"（`find_activity`）的活跃度** | 走「低情绪」通道时：`.env` 的 `VALENCE_ACTIVITY_THRESHOLD` + `ACTIVITY_CONNECTION_RELIEF`；走「嘴硬」通道时：`PRIDE_DEFEND_THRESHOLD` / `PRIDE_DEFEND_RATE`。两通道**二选一**，见「二之二 · 补四」 |
+| **「冲浪 vs 找你」的配比** | `.env` 的 `ACTIVITY_CONNECTION_RELIEF`（冲浪压低 c → 抑制找你）。实测 0 → 4:4，0.10 → 6:2 |
+| 同一场景多久内不重复报 | `.env` 的 `ACTION_COOLDOWN_MINUTES`（2026-10-09 起默认 **60**；≥120 会让冲浪:找你 掉回 4:4） |
 | 判定器重复喂的抑制窗口 | `.env` 的 `ANALYZE_DEDUP_SECONDS`（默认 900） |
 | 注入块里显示什么 | `lib/inject-text.js` |
 | 注入节流（多久重注一次） | `bridge.js` 的 `shouldInject` / `.env` 的 `INJECT_THROTTLE_SECONDS` |
@@ -1037,6 +1103,11 @@ DAYS=3 node _test/simulate_loop.js     # 只跑前 3 天
 ---
 
 ## 十·补、`find_activity`（独处）此前为何永远不触发，以及怎么打开的
+
+> **2026-10-09 更新**：本节下面写的处置（打开 `pride_block` 通道）**现已关闭**。
+> 走那条通道的代价是 `pride ≥ 0.5` 占醒着时间 80%、描述层第 2 段被钉死。
+> 现在改走下面表格里的第二条路 `low_valence`。改法、参数与实测见「二之二 · 补四」。
+> 本节保留，因为"五条路四条出厂即死"这个诊断依然是理解 `find_activity` 的地图。
 
 > 2026-10-07。线上跑了一整天，`contact` 触发 2 次、**`find_activity` 0 次**。
 > 这不是部署问题，是**引擎里通往 `find_activity` 的每一条路，默认都用"哨兵值"关着**。
